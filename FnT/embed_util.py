@@ -2,7 +2,10 @@ import sys
 import os
 import psi4
 import numpy as np
-sys.path.append(os.environ['PSI4_BOMME_RLMO'])
+
+sys.path.insert(0, "../common")
+
+
 import bo_helper
 import helper_HF
 import LIST_help

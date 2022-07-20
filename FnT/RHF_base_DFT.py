@@ -2,22 +2,10 @@ import os
 import sys
 import re
 from scipy.linalg import fractional_matrix_power
-import bo_helper
 #sys.path.append(os.environ['PSIPATH'])
 from pkg_resources import parse_version
-
-import pdb
-import time
-import scipy.linalg
-import psi4
-import util
-import numpy as np
-import helper_HF
 import argparse
-from util import Molecule
-from init import initialize
-from base_embedding import RHF_embedding_base
-from embed_util import FntFactory
+
 
 def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_param, bset, bsetAA,\
                           bsetBB, obs1, obs2, puream, embmol, wfn, isoA, isoB, debug):
@@ -277,10 +265,30 @@ if __name__ == "__main__":
             default=1, type = int)
     parser.add_argument("--maxit", help="Max number of iterations (default : 20)", required=False,
             default=4, type = int)
+    parser.add_argument("--mod_path", help="Specify path of common modules", required=False, 
+            type=str, default="/home/matteo/projected_emb/common")
 
     
     args = parser.parse_args()
     # ene_vanilla is the energy of the genuine supermolecular calculation
+
+    modpaths = args.mod_path
+    if modpaths is not None :
+        for path in modpaths.split(";"):
+            sys.path.append(path)
+
+    import time
+    import scipy.linalg
+    import psi4
+    import numpy as np
+    import helper_HF
+    from util import Molecule
+    from init import initialize
+    from base_embedding import RHF_embedding_base
+    from embed_util import FntFactory
+    
+    import util
+    import bo_helper
 
     bset,bsetAA,bsetBB,supermol,wfnAB,ene_vanilla,isoA,isoB = initialize(args.scf_type,args.obs1,\
                                                     args.obs2,args.puream,args.geomA,args.geomB,args.func,args.cc_type,args.cc_maxit,args.e_conv,args.d_conv,\
