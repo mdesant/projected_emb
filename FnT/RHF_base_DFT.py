@@ -2,7 +2,6 @@ import os
 import sys
 import re
 from scipy.linalg import fractional_matrix_power
-sys.path.append(os.environ['PSI4_BOMME_RLMO'])
 import bo_helper
 #sys.path.append(os.environ['PSIPATH'])
 from pkg_resources import parse_version
