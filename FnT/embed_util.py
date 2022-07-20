@@ -266,6 +266,28 @@ class FntFactory():
               # F_emb (extrapolated) is used as input for the next step (through the finalize step)
               self.__thaw.LiST().finalize(F_emb)  
               self.__thaw.set_Femb( np.array(F_emb) )
+        elif acc_scheme == 'lv_shift':
+                   muval = 0.1
+                   Ctrial = self.__thaw.Ca_subset('ALL')
+                   Fp = np.matmul(Ctrial.T, np.matmul(F_emb,Ctrial) )   # Express the Fock in the trial MO basis
+                   lv = np.empty(nbf-ndoccA)
+                   lv.fill(muval)
+                   diag = np.zeros(nbf)
+                   diag[ndoccA:] = lv
+                   lvmat = np.diagflat(diag)
+    
+                   Fp = Fp + lvmat
+            
+                   eigs, C2 = np.linalg.eigh(Fp)             # get the 'improved' eigenvectors
+                   idx = eigs.argsort()[::]
+                   C_AA = Ctrial.dot(C2)                     # Back transform, Eqn. 3.174
+                   eigvals = eigs[idx]
+                   #for back-compatibility
+                   C_AA = C_AA[:,idx]
+                   self.__thaw.set_Ca(C_AA)
+                   C_inv = np.linalg.inv(Ctrial)
+                   F_emb = np.matmul(C_inv.T, np.matmul(Fp,C_inv) )   # Express the Fock in the trial MO basis
+                   self.__thaw.set_Femb( np.array(F_emb) )
 
 
         
