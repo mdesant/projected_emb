@@ -1,5 +1,5 @@
 """
-Aux function for real-time propagation
+Aux function for input processing
 """
 __authors__   =  "Matteo De Santis"
 __credits__   =  ["Matteo De Santis"]
@@ -15,10 +15,6 @@ sys.path.insert(0,"./LISTMOD")
 import numpy as np
 import psi4
 from pkg_resources import parse_version
-from bo_helper import get_BOFock 
-from bo_helper import get_BOFockRT
-import helper_HF
-import LIST_help
 ##################################################################
 
 def set_input(fgeom):
