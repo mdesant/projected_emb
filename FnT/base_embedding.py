@@ -260,6 +260,8 @@ class RHF_embedding_base():
   def finalize(self):
       self.__Ccoeff = None
       self.__Cocc = None
+  def func_name(self):
+      return self.__funcname
 ############################################################################
 def make_Huzinaga(F_sub,ovap_sub,Cocc):
    # Cocc of the 'embedding' fragment

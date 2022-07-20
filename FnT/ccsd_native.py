@@ -53,8 +53,10 @@ def wfn_in_dft(molA,molB,isoA,cc_outfile,ene_sup,FnT_ene,wf_type='ccsd'):
                             # in which F =  Fock(functional) is used as starting point 
         E_DFT_in_DFT = FnT_ene # E_nuclear is included
  
- 
-        E_inter2=np.einsum('pq,pq->', F_A +hcore_A_in_B , Da) 
+        if molA.func_name() == 'hf' :
+         E_inter2=np.einsum('pq,pq->', F_A +hcore_A_in_B , Da) 
+        else: 
+         E_inter2 = 2.0*np.einsum('pq,pq->', hcore_A_in_B , Da) + twoel_eneA
  
         dft_correction = ene_sup-FnT_ene
         tE_WF_in_DFT =  E_DFT_in_DFT -(Ecore + twoel_eneA) +E_inter2 +  ecorr

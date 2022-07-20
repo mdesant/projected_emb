@@ -267,7 +267,7 @@ class FntFactory():
               self.__thaw.LiST().finalize(F_emb)  
               self.__thaw.set_Femb( np.array(F_emb) )
         elif acc_scheme == 'lv_shift':
-                   muval = 0.1
+                   muval = 0.5
                    Ctrial = self.__thaw.Ca_subset('ALL')
                    Fp = np.matmul(Ctrial.T, np.matmul(F_emb,Ctrial) )   # Express the Fock in the trial MO basis
                    lv = np.empty(nbf-ndoccA)
