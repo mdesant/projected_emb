@@ -112,8 +112,7 @@ class RHF_embedding_base():
           self.__scfboost = helper_HF.DIIS_helper(max_vec) 
       elif self.__accel == 'list':
           self.__scfboost = list_baseclass(self.__Cocc,scf_common,acc_opts,debug)
-      else:
-          print("invalid keywork : diis|list")
+
   def diis(self):
       acc_type  = self.__accel
       if acc_type != 'diis':

@@ -10,7 +10,6 @@ __date__      = "2020-03-01"
 
 import sys
 import os
-sys.path.insert(0,"./LISTMOD")
 
 import numpy as np
 import psi4
