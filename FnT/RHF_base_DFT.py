@@ -120,6 +120,7 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     jobrun.thaw_active()
     jobrun.clean()
     print("end testing")
+    debug_out = open("debug.out", "w")
     MAXITER = maxit
     t = time.time()
      
@@ -128,15 +129,17 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
 
             jobrun.initialize(superdict)
             E_step , dRMS = jobrun.thaw_active() 
-            print('FnT Iteration %3d: Frag = %s Energy = %4.16f  dRMS = % 1.5E %s'
+            print('FnT Iteration %3d: Frag = %s Energy = %4.12f  dRMS = % 1.5E %s'
                       % (FnT_ITER,superdict['thaw'].whoIam(),E_step ,dRMS,superdict['thaw'].acc_scheme()   ))
+            if debug:
+               debug_out.write('FnT Iteration %3d: Frag = %s Energy(Im) = %.16e\n' % (FnT_ITER,superdict['thaw'].whoIam(),E_step.imag) )
             #swap dictionary values
             superdict.update({'thaw': superdict['frozn'],'frozn': superdict['thaw']})
 
             #if FnT_ITER == MAXITER:
             #    psi4.core.clean()
             #    raise Exception("Maximum number of FnT cycles exceeded.\n")
-        
+    debug_out.close()    
     ###################################################################################
     #print('Total time for FnT iterations: %.3f seconds \n\n' % (time.time() - t))
     #print("FnT iterations : %i" % FnT_ITER)
@@ -233,6 +236,8 @@ if __name__ == "__main__":
             type=str, default="6-31G*")
     parser.add_argument("--puream", help="Pure AM basis option on", required=False,
             default=False, action="store_true")
+    parser.add_argument("--df_guess", help="Density-fitted pre-scf on", required=False,
+            default=False, action="store_true")
     parser.add_argument("--scf_type", help="Specify the scf type: direct or df (for now)", required=False, 
             type=str, default='direct')
     parser.add_argument("--cc_type", help="Specify the cc type: conventional ['conv'], density-fitted [df], cholesky-decomp. [cd]", required=False, 
@@ -290,7 +295,7 @@ if __name__ == "__main__":
     import util
     import bo_helper
 
-    bset,bsetAA,bsetBB,supermol,wfnAB,ene_vanilla,isoA,isoB = initialize(args.scf_type,args.obs1,\
+    bset,bsetAA,bsetBB,supermol,wfnAB,ene_vanilla,isoA,isoB = initialize(args.scf_type,args.df_guess,args.obs1,\
                                                     args.obs2,args.puream,args.geomA,args.geomB,args.func,args.cc_type,args.cc_maxit,args.e_conv,args.d_conv,\
                                                     args.charge,args.chargeA,args.multA,args.chargeB,args.multB)
    

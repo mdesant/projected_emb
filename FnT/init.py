@@ -6,7 +6,7 @@ import re
 sys.path.insert(0, "../common")
 from util import Molecule
 
-def initialize(scf_type,obs1,obs2,puream,geomA,geomB,func,cc_type,cc_maxiter,e_conv,d_conv,\
+def initialize(scf_type,df_guess,obs1,obs2,puream,geomA,geomB,func,cc_type,cc_maxiter,e_conv,d_conv,\
                 charge,chargeA,multA,chargeB,multB):
     
     # check compatibility scf_type && cc_type
@@ -80,11 +80,11 @@ def initialize(scf_type,obs1,obs2,puream,geomA,geomB,func,cc_type,cc_maxiter,e_c
 
     psi4.set_options({'basis': 'userdefined',
                       'puream': puream,
-                      'DF_SCF_GUESS': 'False',
+                      'DF_SCF_GUESS': df_guess,
                       'scf_type': scf_type,
                       'dft_radial_scheme' : 'becke',
-                      'dft_radial_points': 80,
-                      'dft_spherical_points' : 974,
+                       #'dft_radial_points': 80,
+                      'dft_spherical_points' : 434,
                       #'cubeprop_tasks': ['orbitals'],
                       #'cubeprop_orbitals': [1, 2, 3, 4,5,6,7,8,9,10],
                       'CUBIC_GRID_OVERAGE' : L,
@@ -112,8 +112,8 @@ def initialize(scf_type,obs1,obs2,puream,geomA,geomB,func,cc_type,cc_maxiter,e_c
                       'puream': puream,
                       'scf_type': scf_type,
                       'dft_radial_scheme' : 'becke',
-                      'dft_radial_points': 80,
-                      'dft_spherical_points' : 974,
+                      #'dft_radial_points': 80,
+                      'dft_spherical_points' : 434,
                       #'cubeprop_tasks': ['orbitals'],
                       #'cubeprop_orbitals': [1, 2, 3, 4,5,6,7,8,9,10],
                       'CUBIC_GRID_OVERAGE' : L,
@@ -131,8 +131,8 @@ def initialize(scf_type,obs1,obs2,puream,geomA,geomB,func,cc_type,cc_maxiter,e_c
                       'puream': puream,
                       'scf_type': scf_type,
                       'dft_radial_scheme' : 'becke',
-                      'dft_radial_points': 80,
-                      'dft_spherical_points' : 974,
+                      #'dft_radial_points': 80,
+                      'dft_spherical_points' : 434,
                       #'cubeprop_tasks': ['orbitals'],
                       #'cubeprop_orbitals': [1, 2, 3, 4,5,6,7,8,9,10],
                       'CUBIC_GRID_OVERAGE' : L,
@@ -143,6 +143,7 @@ def initialize(scf_type,obs1,obs2,puream,geomA,geomB,func,cc_type,cc_maxiter,e_c
     # set more options
     if cc_flag:
         psi4.set_options({'cc_type': cc_type,
+                        'cachelevel': 0,
                         'df_ints_io' : 'save',
                         'freeze_core' : False,
                         'mp2_type': 'conv',
