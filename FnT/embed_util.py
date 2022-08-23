@@ -189,13 +189,14 @@ class FntFactory():
         Ovap =psi4.core.Matrix.from_array( self.__thaw.S() ) # overlap
         nbf = self.__thaw.nbf()
         ndoccA =self.__thaw.ndocc()
-        if self.__debug:
-          print('------------------------------------------')
-          print("I am fragment '%s'\n" % self.__thaw.whoIam())
-          print("Print infos: ...")
-          print("n doubly occupied : %i" % ndoccA)
-          print("n basis set functions : %i" % nbf)
-          print('------------------------------------------')
+
+        #if self.__debug:
+        #  print('------------------------------------------')
+        #  print("I am fragment '%s'\n" % self.__thaw.whoIam())
+        #  print("Print infos: ...")
+        #  print("n doubly occupied : %i" % ndoccA)
+        #  print("n basis set functions : %i" % nbf)
+        #  print('------------------------------------------')
         
         
         
@@ -207,8 +208,7 @@ class FntFactory():
         frag_label = self.__thaw.whoIam()
         
        
-        F_emb = self.__thaw.get_Fock(Cocc_sup)
-        
+        F_emb,ene = self.__thaw.get_Fock(Cocc_sup,True)
         D_AA = psi4.core.Matrix.from_array( self.__thaw.Da() )
         G_AA, twoel_ene = self.__thaw.G()
         core = F_emb - G_AA
@@ -270,7 +270,7 @@ class FntFactory():
               self.__thaw.LiST().finalize(F_emb)  
               self.__thaw.set_Femb( np.array(F_emb) )
         elif acc_scheme == 'lv_shift':
-                   muval = 0.5
+                   muval = self.__thaw.acc_param()[1]
                    Ctrial = self.__thaw.Ca_subset('ALL')
                    Fp = np.matmul(Ctrial.T, np.matmul(F_emb,Ctrial) )   # Express the Fock in the trial MO basis
                    lv = np.empty(nbf-ndoccA)
@@ -296,4 +296,4 @@ class FntFactory():
         
         
         self.__thaw.set_eps(eigvals)
-        return SCF_E, dRMS
+        return SCF_E, ene,dRMS

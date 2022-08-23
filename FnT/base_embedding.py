@@ -33,6 +33,7 @@ class RHF_embedding_base():
       self.__scfboost = None
       self.__Femb = None   # ?
       self.__accel = None
+      self.__acc_opts = None
       self.__bset_mono = None   # fragment basisset
       self.__bset_sup = None    # supermolecular basisset
       self.__jk_mono = None     # JK object built  from fragment basis
@@ -104,14 +105,19 @@ class RHF_embedding_base():
 
       # prepare a dictionary of commons
       scf_common = {'nbf' : self.__nbf, 'nbf_tot': self.__nb_super, 'occ_num' : self.__ndocc,  'Hcore' : Hsup, 'ovap':ovap,'mono_basis': basis_mono, 'sup_basis': basis_sup,'jk' : self.__jk_sup, 'jk_mono' : self.__jk_mono, 'ftype' : self.__funcname, 'frag_id': self.__tagname}
-
+ 
+      self.__acc_opts = acc_opts
+ 
+      # acceleration engine name
       self.__accel = acc_opts[0]
       # set the acceleration method
-      max_vec = acc_opts[1]
+      max_vec = int(acc_opts[1])
       if self.__accel == 'diis':
           self.__scfboost = helper_HF.DIIS_helper(max_vec) 
       elif self.__accel == 'list':
           self.__scfboost = list_baseclass(self.__Cocc,scf_common,acc_opts,debug)
+      elif self.__accel == 'lv_shift':
+          self.__scfboost = None
 
   def diis(self):
       acc_type  = self.__accel
@@ -123,6 +129,9 @@ class RHF_embedding_base():
       if acc_type != 'list':
          raise Exception("Not supposed to use list")
       return self.__scfboost
+  
+  def acc_param(self):
+      return self.__acc_opts
 
   def acc_scheme(self):
       res=self.__accel
@@ -132,7 +141,8 @@ class RHF_embedding_base():
       res = self.__jk_sup
       return res
 
-  def get_Fock(self,Csup):
+  def get_Fock(self,Csup,return_ene=False):
+      
       nbf = self.__nbf
       nbf_tot = self.__nb_super
       Hcore = self.__Honeel
@@ -142,9 +152,13 @@ class RHF_embedding_base():
       ftype = self.__funcname
       frag_id = self.__tagname
       occ_num = self.__ndocc
-      fock =  Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,basis,jk,ftype,frag_id)
-      
-      return fock
+
+      fock,ene =  Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,basis,jk,ftype,frag_id)
+
+      if return_ene:
+       return fock,ene
+      else:
+       return fock
 
   def G(self,replace_func=None):
 
@@ -346,19 +360,29 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
     if ftype == 'hf':
 
         Fock_tmp -= np.array(jk.K()[0])
-
+        # get the energy
+        ene = np.matmul( (Hcore+Fock_tmp),Dmat)
+        ene = np.trace(ene)
         if frag_id == 'A':
-            subHcore = Hcore[:nbf,:nbf]
+            fock = Fock_tmp[:nbf,:nbf]
+
+            # get slice of each term % debug
+            #subHcore = Hcore[:nbf,:nbf]
         
-            J=np.array(jk.J()[0])[:nbf,:nbf] #frag 'A' basis set is in the left upper corner (J_AA)
-            K=np.array(jk.K()[0])[:nbf,:nbf] #frag 'A' : K_AA
+            #J=np.array(jk.J()[0])[:nbf,:nbf] #frag 'A' basis set is in the left upper corner (J_AA)
+            #K=np.array(jk.K()[0])[:nbf,:nbf] #frag 'A' : K_AA
         elif frag_id == 'B':
-            J=np.array(jk.J()[0])[-nbf:,-nbf:] #frag 'B' basis set is in the right bottom corner (J_BB)
-            K=np.array(jk.K()[0])[-nbf:,-nbf:] #frag 'B' : K_BB
-            subHcore = Hcore[-nbf:,-nbf:]
+            fock = Fock_tmp[-nbf:,-nbf:]
+             
+            # get slice of each term % debug
+            #subHcore = Hcore[-nbf:,-nbf:]
+            #J=np.array(jk.J()[0])[-nbf:,-nbf:] #frag 'B' basis set is in the right bottom corner (J_BB)
+            #K=np.array(jk.K()[0])[-nbf:,-nbf:] #frag 'B' : K_BB
         else:
             print("check fragment labels")
-        fock = subHcore + np.float_(2.0)*J -K
+
+        #put the terms together
+        #fock = subHcore + np.float_(2.0)*J -K
     else: 
         # Build Vxc matrix 
         #D must be a psi4.core.Matrix object not a numpy.narray 
@@ -383,7 +407,7 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
         potential.compute_V([V])
         potential.finalize()
         #compute the corresponding XC energy (low level)
-        #Exc= potential.quadrature_values()["FUNCTIONAL"]
+        Exc= potential.quadrature_values()["FUNCTIONAL"]
         
         if sup.is_x_hybrid():
           #
@@ -391,21 +415,28 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
           alpha = sup.x_alpha()
           K = np.array(jk.K()[0])
           V.add(psi4.core.Matrix.from_array(-alpha*K))
-          #Exc += -alpha*np.trace(np.matmul(D,K))
+          #contribution to the XC energy
+          Exc += -alpha*np.trace(np.matmul(Dmat,K))
         # Fock calculated on the 'super' basis set
         Fock_tmp += np.array(V)
+        ene = np.matmul(Dmat,Hcore)
+        ene = 2.0*np.trace(ene)
+        ene += 2.0*np.trace(np.matmul(Dmat,np.array(jk.J()[0])) )
+        ene =+ Exc
         if frag_id == 'A':
-            subHcore = Hcore[:nbf,:nbf]
-        
-            J=np.array(jk.J()[0])[:nbf,:nbf] #frag 'A' basis set is in the left upper corner (J_AA)
-            V = np.asarray(V)[:nbf,:nbf] 
+            fock = Fock_tmp[:nbf,:nbf]
+            #subHcore = Hcore[:nbf,:nbf]
+            #J=np.array(jk.J()[0])[:nbf,:nbf] #frag 'A' basis set is in the left upper corner (J_AA)
+            #V = np.asarray(V)[:nbf,:nbf] 
         elif  frag_id == 'B':
-            J=np.array(jk.J()[0])[-nbf:,-nbf:] #frag 'B' basis set is in the right bottom corner (J_BB)
-            V = np.asarray(V)[-nbf:,-nbf:] 
-            subHcore = Hcore[-nbf:,-nbf:]
+            fock = Fock_tmp[-nbf:,-nbf:]
+            #subHcore = Hcore[-nbf:,-nbf:]
+            #J=np.array(jk.J()[0])[-nbf:,-nbf:] #frag 'B' basis set is in the right bottom corner (J_BB)
+            #V = np.asarray(V)[-nbf:,-nbf:] 
         else:
             print("check fragment labels")
-        fock = subHcore + (2.00*J + V)
+        # sum up
+        #fock = subHcore + (2.00*J + V)
 
     
     # make the projector
@@ -420,7 +451,7 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
         Cocc_ext = Csup[:-nbf,:-occ_num]
     projector = make_Huzinaga(Fock_sub,ovap_sub,Cocc_ext)
 
-    return fock + projector
+    return fock + projector, ene
 ############################################################################
 class list_baseclass():
     ###
@@ -444,9 +475,9 @@ class list_baseclass():
         self.__debug = debug
 
         if self.__kind == 'indirect':
-            self.__e_list = LIST_help.LISTi(list_opts[1]) 
+            self.__e_list = LIST_help.LISTi( int(list_opts[1]) ) 
         elif (self.__kind == 'direct') or (self.__kind == 'better'):
-            self.__e_list = LIST_help.LISTd(list_opts[1])
+            self.__e_list = LIST_help.LISTd( int(list_opts[1]) )
         else:
             raise TypeError("Invalid Keyword")
         #definition of scf_common = [
@@ -521,7 +552,7 @@ class list_baseclass():
         # get  Fock_out
         
         frag_id = self.__frag_name
-        Fock_out = Fock_emb(self.__nbf,self.__nbf_tot,self.__fragocc,self.__Honel,\
+        Fock_out, dum = Fock_emb(self.__nbf,self.__nbf_tot,self.__fragocc,self.__Honel,\
                                  self.__ovap,self.__Csup,self.__sup_bas,self.__jk,self.__funcname,frag_id)
         # update Fock_init, to be used to estimate the diis_error in thie next iteration
         # the out Fock of iteration 'i' is the input Fock for iteraion 'i+1'

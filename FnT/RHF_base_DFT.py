@@ -26,7 +26,7 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     substr = acc_param.split(";")
     if len(substr) <3:
         raise Exception("Wrong SCF_OPTS input.\n")
-    acc_opts = [substr[0],int(substr[1]),substr[2]]
+    acc_opts = [substr[0],float(substr[1]),substr[2]]
     
     
     nAA=bsetAA.nbf() #the number of basis funcs of subsys A
@@ -119,28 +119,35 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     jobrun.initialize(superdict)
     jobrun.thaw_active()
     jobrun.clean()
-    print("end testing")
+    print("end testing ...\n")
     debug_out = open("debug.out", "w")
     MAXITER = maxit
     t = time.time()
      
+    Eold_sup = 0.0 
     
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print("@ Energy label refers to the the fragment being thawed                                                     @")
+    print("@ dRMS refers to the root mean square of the DIIS error of the fragment being thawed                       @")
+    print("@ dE refers to the deviation of the actual genuine supermolecular energy with respect to the previous step @\n")
     for FnT_ITER in range(1, MAXITER + 1):
 
             jobrun.initialize(superdict)
-            E_step , dRMS = jobrun.thaw_active() 
-            print('FnT Iteration %3d: Frag = %s Energy = %4.12f  dRMS = % 1.5E %s'
-                      % (FnT_ITER,superdict['thaw'].whoIam(),E_step ,dRMS,superdict['thaw'].acc_scheme()   ))
+            E_step, E_sup, dRMS = jobrun.thaw_active() 
+            print('FnT Iteration %3d: Frag = %s Energy = %4.12f  dE(sup) = % 1.5E  dRMS = % 1.5E %s'
+                      % (FnT_ITER,superdict['thaw'].whoIam(), E_step, (E_sup-Eold_sup), dRMS, superdict['thaw'].acc_scheme()   ))
             if debug:
                debug_out.write('FnT Iteration %3d: Frag = %s Energy(Im) = %.16e\n' % (FnT_ITER,superdict['thaw'].whoIam(),E_step.imag) )
             #swap dictionary values
             superdict.update({'thaw': superdict['frozn'],'frozn': superdict['thaw']})
-
-            #if FnT_ITER == MAXITER:
-            #    psi4.core.clean()
-            #    raise Exception("Maximum number of FnT cycles exceeded.\n")
+            if abs(E_sup-Eold_sup) < E_conv:
+              break
+            Eold_sup = E_sup
+            if FnT_ITER == MAXITER:
+                print("Maximum number of FnT cycles reached.\n")
     debug_out.close()    
     ###################################################################################
+    print()
     #print('Total time for FnT iterations: %.3f seconds \n\n' % (time.time() - t))
     #print("FnT iterations : %i" % FnT_ITER)
 
