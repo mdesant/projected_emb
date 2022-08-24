@@ -24,11 +24,22 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     C_BB = np.array(isoB.Ca())
    
     substr = acc_param.split(";")
-    if len(substr) <3:
+    if len(substr) !=3:
         raise Exception("Wrong SCF_OPTS input.\n")
     acc_opts = [substr[0],float(substr[1]),substr[2]]
-    
-    
+
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print("@ Acceleration scheme : %s" % acc_opts[0])
+
+    if acc_opts[0] == 'lv_shift':
+       print("@ shift param : %.2f" % acc_opts[1])
+    else:
+       print("@ lenght error vector : %i" % acc_opts[1])
+    if acc_opts[0] != 'lv_shift':
+       print("@ Acceleration type : %s\n" % acc_opts[2])
+    else:
+       print()
+
     nAA=bsetAA.nbf() #the number of basis funcs of subsys A
 
 
