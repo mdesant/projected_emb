@@ -8,13 +8,13 @@ import argparse
 
 
 def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_param, bset, bsetAA,\
-                          bsetBB, obs1, obs2, puream, embmol, wfn, isoA, isoB, debug):
+                          bsetBB, obs1, obs2, puream, embmol, wfn, isoA, isoB, debug, loewdin = False, supermol = False):
 
 
     nb_tot = bset.nbf()
     ndoccA = isoA.nalpha()
     Cocc_AA = isoA.Ca_subset('AO','OCC')
-    print("Cocc_AA check: %s" % np.allclose(Cocc_AA,isoA.Ca().np[:,:ndoccA]))
+    print("DEBUG: Cocc[AA] match GS MOs %s" % np.allclose(Cocc_AA,isoA.Ca().np[:,:ndoccA]))
     D_AA = isoA.Da()
     C_AA = np.array(isoA.Ca())
 
@@ -45,7 +45,7 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
 
 
     #mints object for bset_super
-    print("functions in frag A: %i" % nAA)
+    #print("functions in frag A: %i" % nAA)
     mints = psi4.core.MintsHelper(bset)
 
     V = np.asarray(mints.ao_potential())
@@ -108,14 +108,36 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     #   def __init__(self,nb_frag,ndocc_frag,nb_super,\
     #                                 ndocc_super,funcname,tag)
     ########################################
-    subA = RHF_embedding_base(bsetAA.nbf(), ndoccA, nb_tot, ndocc, func_l, 'A')
-    subA.initialize(S, bsetAA, bset, Hcore, C_AA,acc_opts,scf_type)
+    if supermol:
+        bsetA_in = bset
+        bsetB_in = bset
+        tmp = C_AA
+        C_AA = np.zeros((nb_tot,nb_tot))
+        C_AA[:nAA,:nAA] = tmp
+        # for MO energies listing
+        limitA = nb_tot
+        #
+        nBB = C_BB.shape[0]
+        tmp = C_BB
+        C_BB = np.zeros((nb_tot,nb_tot))
+        
+        C_BB[nAA:,:nBB] = tmp
+        limitB = limitA
+
+    else:
+        bsetA_in = bsetAA
+        bsetB_in = bsetBB
+        limitA = nAA
+        limitB = nb_tot-nAA
+
+    subA = RHF_embedding_base(bsetA_in.nbf(), ndoccA, nb_tot, ndocc, func_l, 'A',supermol=supermol)
+    subA.initialize(S, bsetA_in, bset, Hcore, C_AA,acc_opts,scf_type,debug=debug)
     print("I am frag '%s' : initializing\n" % subA.whoIam())
     ######################
 
     #populate sub B base object
-    subB = RHF_embedding_base(bsetBB.nbf(), ndoccB, nb_tot, ndocc, func_l, 'B')
-    subB.initialize(S, bsetBB, bset, Hcore, C_BB,acc_opts,scf_type)
+    subB = RHF_embedding_base(bsetB_in.nbf(), ndoccB, nb_tot, ndocc, func_l, 'B',supermol=supermol)
+    subB.initialize(S, bsetB_in, bset, Hcore, C_BB,acc_opts,scf_type,debug=debug)
     print("I am frag '%s' : initializing\n" % subB.whoIam())
 
     
@@ -123,11 +145,12 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     superdict ={'thaw' : subA, 'frozn' : subB}
     
     
-    jobrun = FntFactory(debug)
+    jobrun = FntFactory(debug,loewdin)
 
     #test
     print("testing section ...")
     jobrun.initialize(superdict)
+    print("Full basis : %s\n" % jobrun.is_full_basis())
     jobrun.thaw_active()
     jobrun.clean()
     print("end testing ...\n")
@@ -171,19 +194,28 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     Fock_sup,Jene,Exc = bo_helper.get_AOFock_JK(Dmat_sup,Cocc_sup,Hcore,jk,func_l,bset)
     FH = np.matmul(Dmat_sup,Hcore)
     SCF_E_test = 2.0*np.trace(FH) + Jene + Exc +Enuc
+    print("Final results:\n")
+    full_ovap = subA.full_ovapm()
+    res =  np.matmul(Cocc_sup.T,np.matmul(full_ovap,Cocc_sup))
+    print("Final occupied MOs are orthogonal: %s" % np.allclose(np.eye(Cocc_sup.shape[1]),res) )
 
+    subA.finalize()
+    subB.finalize()
 
+    # get final eigenvalues
+    eigvalA = np.asarray(subA.eigvals())
+    eigvalB = np.asarray(subB.eigvals())
     
     # fragment A orbital energies
     print('Orbital Energies [Eh] for frag. "A"\n')
 
     print('Doubly Occupied:\n')
     for k in range(ndoccA):
-         print('%iA : %.6f' %(k+1,np.asarray(subA.eigvals())[k]))
+         print('%iA : %.6f' %(k+1,eigvalA[k]))
 
     print('Virtual:\n')
-    for k in range(ndoccA,nAA):
-         print('%iA : %.6f'% (k+1,np.asarray(subA.eigvals())[k]))
+    for k in range(ndoccA,limitA):
+         print('%iA : %.6f'% (k+1,eigvalA[k]))
     print()
     
     # fragment B orbital energies
@@ -191,11 +223,11 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
 
     print('Doubly Occupied:\n')
     for k in range(ndoccB):
-         print('%iA : %.6f' %(k+1,np.asarray(subB.eigvals())[k]))
+         print('%iA : %.6f' %(k+1,eigvalB[k]))
 
     print('Virtual:\n')
-    for k in range(ndoccB,(nb_tot-nAA)):
-         print('%iA : %.6f'% (k+1,np.asarray(subB.eigvals())[k]))
+    for k in range(ndoccB,(limitB)):
+         print('%iA : %.6f'% (k+1,eigvalB[k]))
 
     print()
 
@@ -214,8 +246,10 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
                       'CUBEPROP_ISOCONTOUR_THRESHOLD' : 1.0,
                       'CUBIC_GRID_SPACING' : [0.2,0.2,0.2]})
     
+
     isoA.Ca().copy(psi4.core.Matrix.from_array(subA.Ca_subset('ALL') ))
     isoA.Cb().copy(psi4.core.Matrix.from_array(subA.Ca_subset('ALL') ))
+      
 
     isoA.Da().copy(psi4.core.Matrix.from_array(subA.Da() ))
     isoA.Db().copy(psi4.core.Matrix.from_array(subA.Da() ))
@@ -225,12 +259,15 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
  
     # quick test
     _F = subA.Femb()
-    _C = subA.Ca_subset('ALL')
     rtest = np.isrealobj(_F)
     print("Fock (emb) is real : %s" % rtest)
-    test = np.matmul(_C.T,np.matmul(_F,_C))
-    diag_test = np.diagflat(np.diagonal(test))
-    print("Fock is diagonal : %s" % np.allclose(test,diag_test,atol=1.0e-8))
+
+    if (acc_opts[0] != 'imag_time'):
+       _C = subA.Ca_subset('ALL')
+       test = np.matmul(_C.T,np.matmul(_F,_C))
+       diag_test = np.diagflat(np.diagonal(test))
+       print("Fock is diagonal : %s" % np.allclose(test,diag_test,atol=1.0e-8))
+    
     return subA, subB,SCF_E_test, isoA
 ############################################################################
 
@@ -245,6 +282,10 @@ if __name__ == "__main__":
             type=str, default="XYZ")
     parser.add_argument("-gB","--geomB", help="Specify geometry file for the subsystem B", required=True, 
             type=str, default="XYZ")
+    # test: use the total basis set instead of the mono molecular basis 
+    parser.add_argument("-s", "--supermol", help="Do the projection in the supermolecular basis", required=False,
+            default=False, action="store_true")
+   
     parser.add_argument("-d", "--debug", help="Debug on, prints debug info to err.txt", required=False,
             default=False, action="store_true")
 
@@ -273,6 +314,8 @@ if __name__ == "__main__":
     parser.add_argument("--scf_opts", help="Select SCF acceleration options : accel_scheme;maxvec;type (default : diis;6; None )", required=False,
             default="diis;6; None", type=str)
     # accel_scheme : diis|list, max_vec = N, type : direct|indirect|better|None
+    parser.add_argument("--loewdin", help="Activate Intermediate Loewdin orthogonalization (on Cocc[sup]->Fock) ", required=False,
+            default=False, action="store_true")
     parser.add_argument("-m", "--numpy_mem", help="Set the memeory for the PSI4 driver (default 2 Gib)", required=False,
             default=2, type = int)
 
@@ -320,7 +363,7 @@ if __name__ == "__main__":
     # main function ,update isoA
     subA, subB, FnT_ene, isoA = run(args.geomA, args.geomB, args.scf_type,\
                              args.numpy_mem, args.func, args.maxit, args.e_conv, args.d_conv, args.scf_opts,\
-                             bset, bsetAA, bsetBB, args.obs1, args.obs2, args.puream, supermol, wfnAB, isoA, isoB, args.debug)
+                             bset, bsetAA, bsetBB, args.obs1, args.obs2, args.puream, supermol, wfnAB, isoA, isoB, args.debug, args.loewdin, args.supermol)
     import ccsd_native
     import ccsd_conv
     if args.cc_type is not None :

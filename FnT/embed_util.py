@@ -158,10 +158,15 @@ def get_orbitals(scf_accel,atype,Amat,Fock,D_in,ndocc,\
 #FntFactory class
 # this implementation account only for two subsystem, namely A and B
 class FntFactory():
-    def __init__(self,debug=False):
+    def __init__(self,debug=False,loewdin=False):
        self.__thaw = None
        self.__frozn = None
+       self.__Vminus = None
+       self.__Vplus = None
+       self.__supermol = False
        self.__debug = debug
+       self.__loewdin = loewdin
+
 
 
     def initialize(self,moldict):
@@ -171,6 +176,11 @@ class FntFactory():
       self.__frozn = moldict['frozn']
       nbf = self.__thaw.nbf()
       name = self.__thaw.whoIam()
+
+      if self.is_full_basis():
+           self.__supermol = True
+           fullovap = self.__thaw.full_ovapm()
+           self.__Vminus = fractional_matrix_power(fullovap, -0.5)
     
     def status(self):
         print("relaxed : '%s'" % self.__thaw.whoIam())
@@ -178,7 +188,11 @@ class FntFactory():
     def clean(self):
         self.__thaw = None
         self.__frozn = None
-
+    def is_full_basis(self):
+        res = False
+        if self.__thaw.full_ovapm().shape[0] ==  self.__thaw.S().shape[0]:
+           res = True  
+        return res
 ############################################################################
 
     
@@ -204,11 +218,39 @@ class FntFactory():
 
         Cocc_frozn = self.__frozn.Ca_subset('OCC')
         Cocc_sup = self.__thaw.Cocc_sum(Cocc_frozn)
-        
+        #apply orthogonalization ?
+        #check if orthogonal
+        if self.__debug:
+          full_ovap = self.__thaw.full_ovapm()
+          # Oplus is the C.T S C product
+          Oplus= np.matmul(Cocc_sup.T, np.matmul(full_ovap,Cocc_sup) )
+          check_orth = np.allclose(np.eye(Cocc_sup.shape[1]),Oplus)
+          print("Cocc[sup] orthogonal : %s\n" % check_orth)
+        else:
+          Oplus = None
+
+        if self.__loewdin:
+            if Oplus is None:
+                full_ovap = self.__thaw.full_ovapm()
+                Oplus = np.matmul(Cocc_sup.T, np.matmul(full_ovap,Cocc_sup) )
+            loewdin_mat = fractional_matrix_power(Oplus,-0.5)
+            # do loewdin
+            Cocc_sup = np.matmul(Cocc_sup,loewdin_mat)
+            #test_ovap =np.matmul(Cocc_sup.T, np.matmul(full_ovap,Cocc_sup) )
+            #check_orth = np.allclose(np.eye(Cocc_sup.shape[1]),test_ovap)
+            #print("Cocc(sup) orth: %s\n" % check_orth)
+            
         frag_label = self.__thaw.whoIam()
         
-       
+
         F_emb,ene = self.__thaw.get_Fock(Cocc_sup,True)
+        
+        # for test
+        #if self.__thaw.Da().shape[0] == self.__thaw.full_ovapm().shape[0]:
+        #    print("n.el in thawed frag: %.5f" % ( np.trace(np.matmul(self.__thaw.Da(),self.__thaw.full_ovapm())).real) )
+        #    print("D dim : %i,%i\n" % (self.__thaw.Da().shape) )
+        #    print("Ovap of full basis: %s\n" % np.allclose(Ovap.np,self.__thaw.full_ovapm()))
+        
         D_AA = psi4.core.Matrix.from_array( self.__thaw.Da() )
         G_AA, twoel_ene = self.__thaw.G()
         core = F_emb - G_AA
@@ -246,9 +288,16 @@ class FntFactory():
           #old -> replace
           C_AA, Cocc_AA, Dens,eigvals = build_orbitals(F_emb,psi4.core.Matrix.from_array(Amat),ndoccA,nbf)
           #update the orbitals of the thawed fragment
-          self.__thaw.set_Ca(C_AA)
+          self.__thaw.set_Ca(np.array(C_AA))
 
-        # under construction
+        # imaginary time prop
+        elif acc_scheme == 'imag_time':
+              self.__thaw.imag_time().add_F(F_emb)
+              self.__thaw.set_Femb( np.array(F_emb) )
+              self.__thaw.imag_time().compute()
+              Cocc_AA = self.__thaw.imag_time().Cocc()
+              self.__thaw.set_Ca(Cocc_AA,'OCC')
+
 
         elif acc_scheme == 'list':
               self.__thaw.LiST().add_Fock(F_emb.np)
@@ -270,8 +319,20 @@ class FntFactory():
               self.__thaw.LiST().finalize(F_emb)  
               self.__thaw.set_Femb( np.array(F_emb) )
         elif acc_scheme == 'lv_shift':
-                   muval = self.__thaw.acc_param()[1]
+                   #check the determinant of Ctrial matrix, in the case of supermolecular basis  the matrix may be ill-conditioned
                    Ctrial = self.__thaw.Ca_subset('ALL')
+                   
+                   if self.__supermol:
+                      test_det = np.linalg.det(Ctrial)
+                      if not isinstance(test_det,float):
+                          raise TypeError("Check trials eigenvectors")
+                      if abs(test_det) < 1.0e-10:  # a matrix with null determinant is tricky to invert  
+                      # get the trial MO
+                          F_tmp = np.matmul(self.__Vminus.T, np.matmul(F_emb,self.__Vminus) )
+                          eigs, Ctrial = np.linalg.eigh(F_tmp)
+                          Ctrial = np.matmul(self.__Vminus,Ctrial)
+
+                   muval = self.__thaw.acc_param()[1]
                    Fp = np.matmul(Ctrial.T, np.matmul(F_emb,Ctrial) )   # Express the Fock in the trial MO basis
                    lv = np.empty(nbf-ndoccA)
                    lv.fill(muval)
@@ -288,12 +349,12 @@ class FntFactory():
                    #for back-compatibility
                    C_AA = C_AA[:,idx]
                    self.__thaw.set_Ca(C_AA)
-                   C_inv = np.linalg.inv(Ctrial)
+                   C_inv = np.linalg.inv(Ctrial)  # invert Ctrial
                    F_emb = np.matmul(C_inv.T, np.matmul(Fp,C_inv) )   # Express the Fock in the trial MO basis
                    self.__thaw.set_Femb( np.array(F_emb) )
 
 
         
-        
-        self.__thaw.set_eps(eigvals)
+        if not (acc_scheme == 'imag_time'):
+          self.__thaw.set_eps(eigvals)
         return SCF_E, ene,dRMS

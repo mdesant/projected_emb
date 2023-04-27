@@ -10,12 +10,14 @@ __date__      = "2022-03-01"
 
 import sys
 import os
-
+sys.path.insert(0,'../common')
+import it_util
 import numpy as np
 import psi4
 from pkg_resources import parse_version
 import helper_HF
 import LIST_help
+import scipy
 from scipy.linalg import fractional_matrix_power
 ##################################################################
 # acc_opts = [kind, maxvec, variant=None]
@@ -25,10 +27,11 @@ from scipy.linalg import fractional_matrix_power
 class RHF_embedding_base():
 
   def __init__(self,nb_frag,ndocc_frag,nb_super,\
-                                ndocc_super,funcname,tag):
+                                ndocc_super,funcname,tag,fout=sys.stderr,supermol=False):
       self.__eps = None
       self.__Cocc = None
       self.__Ccoeff = None
+      self.__C_midb = None      # aux MO coeff at previous midpont for imaginary time prop
       self.__tagname = None
       self.__scfboost = None
       self.__Femb = None   # ?
@@ -47,7 +50,8 @@ class RHF_embedding_base():
       self.__ndocc_super = ndocc_super
       self.__funcname = funcname
       self.set_tag(tag)
-
+      self.__stdout = fout
+      self.__supermol = supermol
   def initialize(self,ovap,basis_mono,basis_sup,Hsup,Ccoeff,acc_opts,target='direct',debug=False):
       self.__S = ovap
       if self.__tagname == 'A':
@@ -78,20 +82,26 @@ class RHF_embedding_base():
       self.__jk_mono = jk
       if (self.__jk_mono is None):
          raise Exception("Error in JK instance")
-
-      #JK object (supermol basis)
+      
+      # set the total basis set object
       self.__bset_sup =  basis_sup
-      basis_name = basis_sup.name()
-      if target == 'DF' or target == 'MEM_DF' or target == 'DISK_DF':
-          auxb = psi4.core.BasisSet.build(embmol,"DF_BASIS_SCF", "", fitrole="JKFIT",other=basis_name)
-          jk_sup = psi4.core.JK.build_JK(basis_sup,auxb)
-      else:
-          jk_sup = psi4.core.JK.build(basis_sup)
-      jk_sup.set_memory(int(4.0e9))  # 1GB
-      jk_sup.set_do_wK(False)
-      jk_sup.initialize()
 
-      self.__jk_sup = jk_sup
+      if not self.__supermol:          # if the mono molecular basis set != super mol. basis set
+          #JK object (supermol basis)
+          basis_name = basis_sup.name()
+          if target == 'DF' or target == 'MEM_DF' or target == 'DISK_DF':
+              auxb = psi4.core.BasisSet.build(embmol,"DF_BASIS_SCF", "", fitrole="JKFIT",other=basis_name)
+              jk_sup = psi4.core.JK.build_JK(basis_sup,auxb)
+          else:
+              jk_sup = psi4.core.JK.build(basis_sup)
+          jk_sup.set_memory(int(4.0e9))  # 1GB
+          jk_sup.set_do_wK(False)
+          jk_sup.initialize()
+
+          self.__jk_sup = jk_sup
+      else:
+          self.__jk_sup = jk
+
       if (self.__jk_sup is None):
          raise Exception("Error in JK instance")
 
@@ -101,8 +111,10 @@ class RHF_embedding_base():
 
       self.__Honeel = Hsup
 
-    
-
+      if self.__supermol: # if the supermolecular basis is used , for the imaginary time  propagation we opt for the orthogonalized atomic basis , as propagation basis 
+        Vminus =   fractional_matrix_power(ovap, -0.5)      
+      else:
+        Vminus = Ccoeff
       # prepare a dictionary of commons
       scf_common = {'nbf' : self.__nbf, 'nbf_tot': self.__nb_super, 'occ_num' : self.__ndocc,  'Hcore' : Hsup, 'ovap':ovap,'mono_basis': basis_mono, 'sup_basis': basis_sup,'jk' : self.__jk_sup, 'jk_mono' : self.__jk_mono, 'ftype' : self.__funcname, 'frag_id': self.__tagname}
  
@@ -110,12 +122,14 @@ class RHF_embedding_base():
  
       # acceleration engine name
       self.__accel = acc_opts[0]
-      # set the acceleration method
+      # set the acceleration method and initialize
       max_vec = int(acc_opts[1])
       if self.__accel == 'diis':
           self.__scfboost = helper_HF.DIIS_helper(max_vec) 
       elif self.__accel == 'list':
           self.__scfboost = list_baseclass(self.__Cocc,scf_common,acc_opts,debug)
+      elif self.__accel == 'imag_time':
+          self.__scfboost = itime_base(Vminus,self.__Cocc,acc_opts,debug)   # D^{AO} = Vminus D^{orth} Vminus.T
       elif self.__accel == 'lv_shift':
           self.__scfboost = None
 
@@ -124,6 +138,12 @@ class RHF_embedding_base():
       if acc_type != 'diis':
          raise Exception("Not supposed to use diis")
       return self.__scfboost
+  def imag_time(self):
+      acc_type  = self.__accel
+      if acc_type != 'imag_time':
+         raise Exception("Not supposed to use imaginary time propagation")
+      return self.__scfboost
+  # LiST : TO BE REMOVED or IMPROVED
   def LiST(self): 
       acc_type  = self.__accel
       if acc_type != 'list':
@@ -185,14 +205,21 @@ class RHF_embedding_base():
   def Femb(self):         # function to return the Fock for correlated calculation
       return self.__Femb
 
-  def set_Ca(self,Cmat):
+  def set_Ca(self,Cmat, dest='ALL'):
       #check dimensions
-      if (Cmat.shape[0] != self.__nbf):
-         raise Exception("Wrong Cmat dim[0]")
-      if (Cmat.shape[1] != self.__nbf):
-         raise Exception("Wrong Cmat dim[1]")
-      self.__Cocc =   np.array(Cmat)[:,:self.__ndocc]
-      self.__Ccoeff = np.array(Cmat)
+      if not isinstance(Cmat,np.ndarray):
+          raise Exception("not np.ndarray")
+      if dest == 'ALL':  
+         if (Cmat.shape[0] != self.__nbf):
+            raise Exception("Wrong Cmat dim[0]")
+         if (Cmat.shape[1] != self.__nbf):
+            raise Exception("Wrong Cmat dim[1]")
+         self.__Cocc =   np.array(Cmat)[:,:self.__ndocc]
+         self.__Ccoeff = np.array(Cmat)
+      elif dest == 'OCC':
+         self.__Cocc =   np.array(Cmat)[:,:self.__ndocc]
+      else :
+          raise Exception("check MOs usage")
           
   def Ca_subset(self,tag='ALL'):
       if tag == 'OCC':
@@ -203,7 +230,7 @@ class RHF_embedding_base():
           res = self.__Ccoeff
       return res
   def Cocc_sum(self,Cmat):
-      
+      #print("Cmat dim : %i,%i\n" % (Cmat.shape)) 
       nb_tot = self.__nb_super
       ndocc_tot = self.__ndocc_super
       Cocc_super = np.zeros( (nb_tot,ndocc_tot) )
@@ -214,11 +241,15 @@ class RHF_embedding_base():
         #  Cocc_super[:,:self.ndocc()] = self.__Cocc
         #else:
           Cocc_super[:self.nbf(),:self.ndocc()] = self.__Cocc
-          Cocc_super[self.nbf():,self.ndocc():] = Cmat
+          if self.__supermol:
+            Cocc_super[:,self.ndocc():] = Cmat
+          else:    
+            Cocc_super[self.nbf():,self.ndocc():] = Cmat
       elif self.__tagname == 'B':
-        #if self.__Cocc.shape[0] > self.nbf():
-        #  Cocc_super[:,-self.ndocc():] = self.__Cocc
-        #else: 
+        if self.__supermol:
+          Cocc_super[:,-self.ndocc():] = self.__Cocc
+          Cocc_super[:,:-self.ndocc()] = Cmat
+        else: 
           Cocc_super[-self.nbf():,-self.ndocc():] = self.__Cocc
           Cocc_super[:-self.nbf(),:-self.ndocc()] = Cmat
       
@@ -252,6 +283,8 @@ class RHF_embedding_base():
       elif self.__tagname == 'B':
         ovap_sub = self.__S[-self.__nbf:,-self.__nbf:]
       return ovap_sub
+  def full_ovapm(self):
+      return self.__S
   #def H(self):
   #
   #    return self.__Honeel
@@ -271,8 +304,25 @@ class RHF_embedding_base():
       return self.__nbf
 
   def finalize(self):
-      self.__Ccoeff = None
-      self.__Cocc = None
+      if self.__accel == 'imag_time':
+        if self.__supermol:
+            ovap = self.full_ovapm()
+        else:
+            ovap = self.S()
+        Fock = self.Femb()    
+
+        try :
+           eigval,C = scipy.linalg.eigh(Fock, ovap)   
+
+        except scipy.linalg.LinAlgError:
+           print("finalize(); Error in linal.eigh")
+        
+        self.__eps = eigval
+        self.set_Ca(C,'ALL')
+        self.set_Ca(C,'OCC')
+      ##             
+      #self.__Ccoeff = None
+      #self.__Cocc = None
   def func_name(self):
       return self.__funcname
 ############################################################################
@@ -354,7 +404,6 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
     jk.C_left_add(psi4.core.Matrix.from_array(Csup))
     jk.compute()
     jk.C_clear()
-
     #set the Fock corresponding to 'super'  basis set
     Fock_tmp = Hcore + np.float_(2.0)*jk.J()[0]
     if ftype == 'hf':
@@ -383,7 +432,7 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
 
         #put the terms together
         #fock = subHcore + np.float_(2.0)*J -K
-    else: 
+    else:
         # Build Vxc matrix 
         #D must be a psi4.core.Matrix object not a numpy.narray 
         
@@ -398,11 +447,11 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
         sup.allocate() 
         vname = "RV" 
         if not restricted: vname = "UV"
+        
         potential=psi4.core.VBase.build(sup_basis,sup,vname)
         Dm=psi4.core.Matrix.from_array(Dmat.real) 
         potential.initialize()
         potential.set_D([Dm])
-        
         V=psi4.core.Matrix(nbf_tot,nbf_tot)
         potential.compute_V([V])
         potential.finalize()
@@ -423,6 +472,7 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
         ene = 2.0*np.trace(ene)
         ene += 2.0*np.trace(np.matmul(Dmat,np.array(jk.J()[0])) )
         ene =+ Exc
+
         if frag_id == 'A':
             fock = Fock_tmp[:nbf,:nbf]
             #subHcore = Hcore[:nbf,:nbf]
@@ -440,18 +490,53 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
 
     
     # make the projector
-    if frag_id == 'A':
-        Fock_sub = Fock_tmp[:nbf,nbf:]
-        ovap_sub = ovap[:nbf,nbf:].T
-        #Cocc_ext is the  sublock of Cocc_sup  representing the orbitals of the frozen fragment
-        Cocc_ext = Csup[nbf:,occ_num:]
-    elif  frag_id == 'B':
-        Fock_sub = Fock_tmp[-nbf:,:-nbf]
-        ovap_sub = ovap[-nbf:,:-nbf].T
-        Cocc_ext = Csup[:-nbf,:-occ_num]
-    projector = make_Huzinaga(Fock_sub,ovap_sub,Cocc_ext)
+    if nbf == nbf_tot: # the case of a supermolecul setting
+       if frag_id == 'A':
+           D_ext = np.matmul(Csup[:,occ_num:],Csup[:,occ_num:].T)
+       
+       elif  frag_id == 'B':
+           D_ext = np.matmul(Csup[:,:-occ_num],Csup[:,:-occ_num].T)
+       
+       if D_ext.shape[0] != nbf_tot:
+           raise Exception("Check dimension of D_ext (in Huzinaga)")
+       projector = -1.*( np.matmul(Fock_tmp,np.matmul(D_ext,ovap)) + np.matmul(ovap,np.matmul(D_ext,Fock_tmp)) ) 
+    else:    
+       if frag_id == 'A':
+           Fock_sub = Fock_tmp[:nbf,nbf:]
+           ovap_sub = ovap[:nbf,nbf:].T
+           #Cocc_ext is the  sublock of Cocc_sup  representing the orbitals of the frozen fragment
+           Cocc_ext = Csup[nbf:,occ_num:]
+       elif  frag_id == 'B':
+           Fock_sub = Fock_tmp[-nbf:,:-nbf]
+           ovap_sub = ovap[-nbf:,:-nbf].T
+           Cocc_ext = Csup[:-nbf,:-occ_num]
+       projector = make_Huzinaga(Fock_sub,ovap_sub,Cocc_ext)
 
     return fock + projector, ene
+############################################################################
+# helper class
+class F_builder():
+    def __init__(self,scf_common):
+        #unpack data for Fock evaluation
+        # the number of basis function can be defined from basis.nbf()
+        self.__nbf = scf_common['nbf']               
+        self.__nbf_tot = scf_common['nbf_tot']
+        self.__fragocc = scf_common['occ_num']
+        self.__Honel = scf_common['Hcore']
+        self.__ovap = scf_common['ovap']
+        self.__sup_bas = scf_common['sup_basis']
+        self.__mono_bas = scf_common['mono_basis']
+        self.__jk = scf_common['jk']
+        self.__jk_frag = scf_common['jk_mono']
+        self.__funcname = scf_common['ftype']
+        self.__frag_name = scf_common['frag_id']
+    def get_Fock(self,Csup,return_ene=False):
+        fock,ene= Fock_emb(self.__nbf,self.__nbf_tot,self.__frag_occ,self.__Honel,self.__ovap,Csup,\
+                         self.__sup_bas,self.__jk,self.__funcname,self.__fragname)
+        if return_ene :
+            return fock,ene
+        else:
+            return fock
 ############################################################################
 class list_baseclass():
     ###
@@ -590,3 +675,39 @@ class list_baseclass():
         #return Fock_out, cHKS_e
 
 ############################################################################
+class itime_base():
+    def __init__(self,Vminus,Cocc,acc_opts,debug,fout=sys.stderr):
+        self.__Fock = None
+        self.__Cocc = None
+        self.__C_midb = None
+        self.__debug = debug
+        self.__stdout = fout
+        #self.__maxiter = int(acc_opts[2])
+        self.__lstep = -1.0j*np.float_(acc_opts[1]) # the only required parameter
+        self.__Vminus = Vminus # the ndim x ndim  transformation matrix: AO-> prop basis -> TODO: use Vminus=S^-0.5
+        self.__Vplus = None # the inverse matrix of Vminus
+
+        try:
+            self.__Vplus = np.linalg.inv(Vminus)  # still usefull
+        except np.linalg.LinAlgError:
+            print("Error in numpy.linalg.inv in itime_base")
+
+        self.__Cocc = np.matmul(self.__Vplus,Cocc) #initially served on the MO basis. MDS : Why is it needed?
+        
+    def add_F(self,Fmat): 
+        self.__Fock=Fmat
+    def compute(self):
+        fock_ti = self.__Fock
+        C_new,C_midf = it_util.prop_mmut(fock_ti,self.__Cocc,self.__C_midb,self.__lstep,self.__Vminus,fout=sys.stderr)
+
+        #update 
+        self.__C_midb = C_midf
+        self.__Cocc = C_new
+    def Cocc(self,basis='AO'):
+        if basis == 'prop':
+            tmp = np.matmul(self.__Vplus,self.__Cocc) #served on the MO basis
+            return tmp
+        else:
+            return self.__Cocc
+    def Vminus(self):
+        return self.__Vminus
