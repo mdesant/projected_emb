@@ -126,36 +126,32 @@ def build_Wmbej(t1, t2, o, v, MO):
     # Wmbej -= np.einsum('jnfb,mnef->mbej', tmp, MO[o, o, v, v])
     return Wmbej
 
-def wfn_in_dft(molA,molB,isoA,ene_sup,FnT_ene,numpy_mem):
-
-        ndocc = isoA.nalpha()
-        nmo = isoA.nmo()
-        Da = molA.Da()
+def wfn_in_dft(frag_mag,wfn_cc,ene_sup,FnT_ene,numpy_mem):
+        # ene_sup is the reference (genuine) energy of the super molecule
+        frag_cc = frag_mag.frag
+        ndocc = wfn_cc.nalpha()
+        nmo = wfn_cc.nmo()
+        Da = frag_cc.Da()
         
         # the {A} basis functions 
-        bset = isoA.basisset()
+        bset = wfn_cc.basisset()
         nAA = bset.nbf()
-        
+        # get mints for later
         mints = psi4.core.MintsHelper(bset)
         
-        S = np.asarray(mints.ao_overlap())
- 
-        #Gmat object may contain J+K or J+ Vxc depending on the 'func'
-        G_termA, twoel_eneA = molA.G()
- 
+        #S = np.asarray(mints.ao_overlap())
+        S = frag_cc.S()
         
         #the Hcore_A_in_B from DFT_in_DFT
         # Femb() is an handle to the last computed embedded Fock
-        hcore_A_in_B = molA.Femb() - G_termA
+        hcore_A_in_B = frag_mag.Hcore
         Ecore = 2.0*np.trace(np.matmul(hcore_A_in_B,Da))
         print("E. core (A in B)  : %.8f" % Ecore)
         ### CC
     
-        #the effective Hamiltonian for the WF level
-        F_A = molA.Femb()   # since the 'functional' is set at the beginning of the computation
-                            # the fock matrix reads as : hcore(embedding) + G_term(functional). 
-                            # In other words this lead to a  post HF-like calculation 
-                            # in which F =  Fock(functional) is used as starting point 
+        #the reference Fock
+        F_A = wfn_cc.Fa()   
+        
         E_DFT_in_DFT = FnT_ene # E_nuclear is included
 
         print("Entering the CCSD computation..")
@@ -168,7 +164,7 @@ def wfn_in_dft(molA,molB,isoA,ene_sup,FnT_ene,numpy_mem):
         if memory_footprint > numpy_mem:
             psi4.core.clean()
             raise Exception("Estimated memory utilization (%4.2f GB) exceeds numpy_memory \
-                            limit of %4.2f GB." % (memory_footprint, args.numpy_mem))
+                            limit of %4.2f GB." % (memory_footprint, numpy_mem))
  
         # Integral generation from Psi4's MintsHelper
         t = time.time()
@@ -181,7 +177,10 @@ def wfn_in_dft(molA,molB,isoA,ene_sup,FnT_ene,numpy_mem):
         print('Starting AO -> spin-orbital MO transformation...')
         t = time.time()
 
-        C = psi4.core.Matrix.from_array( molA.Ca_subset('ALL') )
+        C = wfn_cc.Ca() #previuosly replaced by frag_cc MOs
+        #check
+        if not np.allclose(C.np,frag_mag.Ca):
+           raise Exception("check C mo coeffs mtx\n")
         MO = np.asarray(mints.mo_spin_eri(C, C))
  
         # Update nocc and nvirt
@@ -223,7 +222,7 @@ def wfn_in_dft(molA,molB,isoA,ene_sup,FnT_ene,numpy_mem):
         MP2corr_E = np.einsum('ijab,ijab->', MOijab, t2) / 4
         print("MP2 correlation energy = %4.15f" % MP2corr_E)
 
-        cc_conv = 1.0e-6
+        cc_conv = 1.0e-9
         ### Start CCSD iterations
         print('\nStarting CCSD iterations')
         ccsd_tstart = time.time()
@@ -305,7 +304,16 @@ def wfn_in_dft(molA,molB,isoA,ene_sup,FnT_ene,numpy_mem):
  
             CCSDcorr_E_old = CCSDcorr_E
            
+        ##################################################################################
 
-
+    
+        E_inter2=np.einsum('pq,pq->', F_A +hcore_A_in_B , Da) # F_A is the WF (ref) Hamiltonian (modified by hcore), correlation energy summed below 
+        
+ 
+        dft_correction = ene_sup-FnT_ene
+        tE_WF_in_DFT =  E_DFT_in_DFT -(Ecore + frag_mag.twoel_ene) +E_inter2 +  CCSDcorr_E
+        E_WF_in_DFT = tE_WF_in_DFT +dft_correction 
+        #print("E (WF-in-DFT) = %.8f" % E_WF_in_DFT)
+        return E_WF_in_DFT
 
 

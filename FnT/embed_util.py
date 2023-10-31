@@ -14,87 +14,6 @@ import scipy.linalg
 from scipy.linalg import fractional_matrix_power
 
 
-# Huzinaga projector has to be added explicitly
-def Hembed(Hcore,jk,CoccA,CoccB,func,basisset):
-    
-    nbf = Hcore.shape[0]
-    # Build G(D_AA + D_BB) on monomolecular basis
-    nbf_tot = basisset.nbf()
-
-    ndoccA = CoccA.shape[1] 
-    ndoccB = CoccB.shape[1] 
-    totocc = ndoccA + ndoccB
-    
-    limit = nbf
-    
-    Cocc = np.zeros((nbf_tot,totocc)) 
-    Cocc[:limit,:ndoccA] = CoccA
-    if CoccB.shape[0] > (nbf_tot-nbf): # we are passing Cocc_BB (nb_tot,ndoccB) -> supermolecular basis set
-       Cocc[:,ndoccA:] = CoccB 
-    else:
-       Cocc[limit:,ndoccA:] = CoccB 
-
-    Dmat = np.matmul(Cocc,Cocc.T)
-
-    jk.C_left_add(psi4.core.Matrix.from_array(Cocc))
-    jk.compute()
-    jk.C_clear()
-    J=np.array(jk.J()[0])[:nbf:,:nbf] #copy into J
-    # Build Vxc matrix 
-    #D must be a psi4.core.Matrix object not a numpy.narray 
-    if func == 'hf':
-        K=np.array(jk.K()[0])[:nbf:,:nbf] #copy into K
-        fock = Hcore + (2.00*J -K)
-    else:
-
-        restricted = True
-        
-        if parse_version(psi4.__version__) >= parse_version('1.3a1'):
-           build_superfunctional = psi4.driver.dft.build_superfunctional
-        else:
-           build_superfunctional = psi4.driver.dft_funcs.build_superfunctional
-        sup = build_superfunctional(func, restricted)[0] 
-        sup.set_deriv(2)
-        sup.allocate() 
-        vname = "RV" 
-        if not restricted: vname = "UV"
-        potential=psi4.core.VBase.build(basisset,sup,vname)
-        Dm=psi4.core.Matrix.from_array(Dmat.real) 
-        potential.initialize()
-        potential.set_D([Dm])
-        
-        V=psi4.core.Matrix(nbf_tot,nbf_tot)
-        potential.compute_V([V])
-        potential.finalize()
-        #compute the corresponding XC energy (low level)
-        #Exc= potential.quadrature_values()["FUNCTIONAL"]
-
-        if sup.is_x_hybrid():
-          #
-          #raise Exception("Low level theory functional is Hybrid?\n")
-          alpha = sup.x_alpha()
-          K = np.array(jk.K()[0])
-          V.add(psi4.core.Matrix.from_array(-alpha*K))
-          #Exc += -alpha*np.trace(np.matmul(D,K))
-        V = np.asarray(V)[:nbf,:nbf] 
-        fock = Hcore + (2.00*J + V)
-    return fock
-############################################################################
-def extract_fock_emb(nbf,Fmat,frag_id):
-    nbf = self.__thaw.nbf()
-    # extract [h+ G(D_AA + D_BB)] on monomolecular basis
-    nbf_tot = Fmat.shape[0]
-    
-    
-    if frag_id == 'A':
-        f_thaw = Fmat[:nbf,:nbf]
-    
-    elif frag_id == 'B':
-        f_thaw = Fmat[-nbf:,-nbf:]
-    else:
-        print("check fragment labels")
-        f_thaw = None
-    return f_thaw
 ############################################################################
 # Diagonalize routine
 def build_orbitals(diag,Lowdin,fragdocc,nbasfrag):
@@ -158,24 +77,26 @@ def get_orbitals(scf_accel,atype,Amat,Fock,D_in,ndocc,\
 #FntFactory class
 # this implementation account only for two subsystem, namely A and B
 class FntFactory():
-    def __init__(self,debug=False,loewdin=False):
+    def __init__(self,debug=False,loewdin=False,outfile=sys.stderr):
        self.__thaw = None
-       self.__frozn = None
+       self.__frozn = None # should contain a 'list' of frozen  molecular fragments
        self.__Vminus = None
        self.__Vplus = None
        self.__supermol = False
        self.__debug = debug
        self.__loewdin = loewdin
+       self.__prop_ortho_mtx = None # contains the matrix to transform rt quantities to the "ortho" basis
+       self.__rt_Cocc = None        # contains the propagated coeff
+       self.__rt_mid_mat = None     # a midpoint aux matrix  for rt_Cocc
+       self.__outfile = outfile
+       self.__fnt_mag = None
 
-
-
-    def initialize(self,moldict):
+    def initialize(self,frags_container):
       
-      #here we have to broadcast the subsystems
-      self.__thaw = moldict['thaw']
-      self.__frozn = moldict['frozn']
-      nbf = self.__thaw.nbf()
-      name = self.__thaw.whoIam()
+      self.__fnt_mag = frags_container 
+      #here we have to assign the subsystems
+      self.__thaw = frags_container[0]
+      self.__frozn = frags_container[1] # is a list of frozen fragments
 
       if self.is_full_basis():
            self.__supermol = True
@@ -183,8 +104,16 @@ class FntFactory():
            self.__Vminus = fractional_matrix_power(fullovap, -0.5)
     
     def status(self):
-        print("relaxed : '%s'" % self.__thaw.whoIam())
-        print("frozen : '%s'" % self.__frozn.whoIam())
+        print("relaxed : '%i'" % self.__thaw.whoIam())
+        frozen_ids = str()
+        for elm in self.__frozn:
+            frozen_ids += str( elm.whoIam() ) + ', '
+        print("frozen : '%s'" % frozen_ids)
+
+    def thawed_id(self):
+        frag_label = self.__thaw.whoIam()
+        return frag_label
+
     def clean(self):
         self.__thaw = None
         self.__frozn = None
@@ -202,6 +131,9 @@ class FntFactory():
         Amat =self.__thaw.Amat()
         Ovap =psi4.core.Matrix.from_array( self.__thaw.S() ) # overlap
         nbf = self.__thaw.nbf()
+        if self.__supermol:
+            if nbf != self.__thaw.full_ovapm().shape[0]:
+                raise
         ndoccA =self.__thaw.ndocc()
 
         #if self.__debug:
@@ -215,9 +147,20 @@ class FntFactory():
         
         
         acc_scheme = self.__thaw.acc_scheme() 
+        # a local copy
+        ffrozen_list = self.__frozn.copy() # necessary?
 
-        Cocc_frozn = self.__frozn.Ca_subset('OCC')
-        Cocc_sup = self.__thaw.Cocc_sum(Cocc_frozn)
+        # res_gather, a tuple containg a list of matrix of MO(occ) coeff and 
+        # a regular supermolecular MO(occ) coeff matrix formed, arranging the 
+        # MO(occ frag) matrix slices side-by-side
+        
+        res_gather = self.__thaw.Cocc_gather(ffrozen_list)
+        Cocc_sup = res_gather[1]
+        #print("len(res_gather) : %i\n" % len(res_gather))
+        #print("len(res_gather[0]) : %i\n" % len(res_gather[0]))
+        #print("type(res_gather[0] : %s\n" % type(res_gather[0]))
+        #print("type(res_gather[1] : %s\n" % type(res_gather[1]))
+
         #apply orthogonalization ?
         #check if orthogonal
         if self.__debug:
@@ -225,7 +168,7 @@ class FntFactory():
           # Oplus is the C.T S C product
           Oplus= np.matmul(Cocc_sup.T, np.matmul(full_ovap,Cocc_sup) )
           check_orth = np.allclose(np.eye(Cocc_sup.shape[1]),Oplus)
-          print("Cocc[sup] orthogonal : %s\n" % check_orth)
+          self.__outfile.write("Cocc[sup] orthogonal : %s\n" % check_orth)
         else:
           Oplus = None
 
@@ -239,12 +182,10 @@ class FntFactory():
             #test_ovap =np.matmul(Cocc_sup.T, np.matmul(full_ovap,Cocc_sup) )
             #check_orth = np.allclose(np.eye(Cocc_sup.shape[1]),test_ovap)
             #print("Cocc(sup) orth: %s\n" % check_orth)
-            
-        frag_label = self.__thaw.whoIam()
-        
+             
 
-        F_emb,ene = self.__thaw.get_Fock(Cocc_sup,True)
-        
+        F_emb,projector,ene = self.__thaw.get_Fock(res_gather,return_ene=True) # res_gather contains Cocc_sup
+        F_emb += projector
         # for test
         #if self.__thaw.Da().shape[0] == self.__thaw.full_ovapm().shape[0]:
         #    print("n.el in thawed frag: %.5f" % ( np.trace(np.matmul(self.__thaw.Da(),self.__thaw.full_ovapm())).real) )
@@ -256,9 +197,19 @@ class FntFactory():
         core = F_emb - G_AA
         # SCF energy and update : E (DFT_in_DFT) = Tr(Hcore [D_AA+D_BB]) +J[D_AA +D_BB] + Exc[D_AA + D_BB]
         #SCF_E, no nuclear contribution
-        one_el =2.0*np.trace(np.matmul(D_AA,core))
+        try:
+           one_el_trace = np.matmul(D_AA,core)
+        except ValueError:
+           print("IndexError catched\n")
+           tmp_AA = np.zeros_like(core) 
+           l1,l2 = self.__thaw.fake_limits()
+           tmp_AA[l1:l2+1,l1:l2+1] = D_AA
+           one_el_trace = np.matmul(tmp_AA,core)
+           # alias
+           D_AA = psi4.core.Matrix.from_array(tmp_AA)
+        one_el = 2.0*np.trace(one_el_trace)   
         SCF_E = one_el + twoel_ene
-        
+        self.__thaw.set_e_scf(SCF_E) 
         
         # DIIS error build and update
         diis_e = np.matmul(F_emb, np.matmul( D_AA.np, Ovap.np))
@@ -274,6 +225,8 @@ class FntFactory():
         
         
         #dRMS = diis_e.rms()
+        #define
+        eigvals = None
 
         dRMS = np.mean(diis_e**2)**0.5
         if acc_scheme == 'diis':
@@ -292,10 +245,15 @@ class FntFactory():
 
         # imaginary time prop
         elif acc_scheme == 'imag_time':
-              self.__thaw.imag_time().add_F(F_emb)
+              self.__thaw.imag_time()[0].add_F(F_emb)
+              #self.__thaw.imag_time()[1].add(F_emb,psi4.core.Matrix.from_array(diis_e))  # diis step
+
+              # extrapolation step    
+              #F_emb = psi4.core.Matrix.from_array(self.__thaw.imag_time()[1].extrapolate())
+              
               self.__thaw.set_Femb( np.array(F_emb) )
-              self.__thaw.imag_time().compute()
-              Cocc_AA = self.__thaw.imag_time().Cocc()
+              self.__thaw.imag_time()[0].compute()
+              Cocc_AA = self.__thaw.imag_time()[0].Cocc()
               self.__thaw.set_Ca(Cocc_AA,'OCC')
 
 
@@ -306,31 +264,37 @@ class FntFactory():
 
               C_AA, Cocc_AA, eigvals = self.__thaw.LiST().diagonalize(F_emb,Amat,ndoccA)
 
+              if self.__supermol:
+                  if C_AA.shape[0] != nbf:
+                      raise ValueError("wrong dimension from LiST.diagonalize()\n")
 
               self.__thaw.set_Ca(C_AA)
 
               # use the new Cocc_sup to calculate the Fock_out in the finalize()
-              Cocc_sup = self.__thaw.Cocc_sum(Cocc_frozn)
+              Cocc_gather = self.__thaw.Cocc_gather(ffrozen_list)
               #print("! Cocc_sup is %s" % type(Cocc_sup))
 
-              self.__thaw.LiST().set_Csup(Cocc_sup)
+              self.__thaw.LiST().set_Csup(Cocc_gather)
 
               # F_emb (extrapolated) is used as input for the next step (through the finalize step)
-              self.__thaw.LiST().finalize(F_emb)  
+              self.__thaw.LiST().finalize(self.__thaw, F_emb)  
               self.__thaw.set_Femb( np.array(F_emb) )
         elif acc_scheme == 'lv_shift':
                    #check the determinant of Ctrial matrix, in the case of supermolecular basis  the matrix may be ill-conditioned
                    Ctrial = self.__thaw.Ca_subset('ALL')
                    
                    if self.__supermol:
-                      test_det = np.linalg.det(Ctrial)
-                      if not isinstance(test_det,float):
-                          raise TypeError("Check trials eigenvectors")
-                      if abs(test_det) < 1.0e-10:  # a matrix with null determinant is tricky to invert  
-                      # get the trial MO
+                      if Ctrial.shape[0] != nbf:
+                          # get the trial MO
                           F_tmp = np.matmul(self.__Vminus.T, np.matmul(F_emb,self.__Vminus) )
                           eigs, Ctrial = np.linalg.eigh(F_tmp)
                           Ctrial = np.matmul(self.__Vminus,Ctrial)
+                      try:   
+                         test_det = np.linalg.det(Ctrial)
+                      except np.linalg.LinAlgError:
+                          print("shape Ctrial: %i,%i\n" % Ctrial.shape)
+                      if abs(test_det) < 1.0e-10:  # a matrix with null determinant is tricky to invert  
+                          raise
 
                    muval = self.__thaw.acc_param()[1]
                    Fp = np.matmul(Ctrial.T, np.matmul(F_emb,Ctrial) )   # Express the Fock in the trial MO basis
@@ -355,6 +319,30 @@ class FntFactory():
 
 
         
-        if not (acc_scheme == 'imag_time'):
-          self.__thaw.set_eps(eigvals)
+        self.__thaw.set_eps(eigvals)
         return SCF_E, ene,dRMS
+
+    def finalize(self): 
+        if not isinstance(self.__fnt_mag,list):
+            raise TypeError("input must be list [of lists]\n")
+        if len(self.__fnt_mag) <2:
+           return None
+        self.__fnt_mag[1].append(self.__fnt_mag[0])
+        self.__fnt_mag[0] = self.__fnt_mag[1].pop(0)
+        
+        #update intrenal frags_list var
+
+        self.__thaw = self.__fnt_mag[0]
+        self.__frozn = self.__fnt_mag[1] # is a list of frozen fragments
+        return 0
+
+    def set_rt_common(self,pulse_opts,ortho_mtx):
+        self.__prop_ortho_mtx = ortho_mtx
+        return None
+
+    def get_Ca(self):
+        return self.__C_AA  # this matrix in the "supermolecular" setting should include also the projeted-out MOs of the other fragment.
+
+    def rt_step(self): # only for non-hybrid funcs
+
+        return None

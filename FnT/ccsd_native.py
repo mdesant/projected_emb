@@ -3,10 +3,23 @@ import psi4
 import re
 #FnT_ene include the nuclear contribution
 # might be possible other wf other than  ccsd, ie ccsd(t), fno- ..
-def wfn_in_dft(molA,molB,isoA,cc_outfile,ene_sup,FnT_ene,wf_type='ccsd'):
+def wfn_in_dft(frag_mag,wfn_cc,cc_outfile,ene_sup,FnT_ene,wf_type='ccsd'):
+        # frag_mag should be a results dataclass        
+        # the {A} basis functions 
+
+        frag_cc = frag_mag.frag
+        basis_wfn = wfn_cc.basisset()
+        num_bf = basis_wfn.nbf()
+        #same from wfn_cc.Da()
+        Da = frag_cc.Da()
+
+        if num_bf != Da.shape[0] : #
+            raise Exception("ccsd_native: check basis set dimension\n")
+
+
         psi4.core.set_output_file(cc_outfile,False)
         #psi4.set_options({'r_convergence': 1e-7})
-        dum0 = psi4.energy(wf_type,ref_wfn=isoA)
+        dum0 = psi4.energy(wf_type,ref_wfn=wfn_cc)
 
         with open(cc_outfile) as file_in: 
              string_file = file_in.readlines()
@@ -25,41 +38,28 @@ def wfn_in_dft(molA,molB,isoA,cc_outfile,ene_sup,FnT_ene,wf_type='ccsd'):
 
         print("CC correlation energy = %1.15f" % ecorr)
 
-        # the {A} basis functions 
-        bset = isoA.basisset()
-        nAA = bset.nbf()
-        #same from molA.Da()
-        Da = isoA.Da()
-
-        mints = psi4.core.MintsHelper(bset)
-        
-        S = np.asarray(mints.ao_overlap())
- 
-        #Gmat object may contain J+K or J+ Vxc depending on the 'func'
-        G_termA, twoel_eneA = molA.G()
+        #mints = psi4.core.MintsHelper(basis_wfn)
+        #S = np.asarray(mints.ao_overlap())
+        S = frag_cc.S()
  
         
         #the Hcore_A_in_B from DFT_in_DFT
-        # Femb() is an handle to the last computed embedded Fock
-        hcore_A_in_B = molA.Femb() - G_termA
+        hcore_A_in_B = frag_mag.Hcore
         Ecore = 2.0*np.trace(np.matmul(hcore_A_in_B,Da))
         print("E. core (A in B)  : %.8f" % Ecore)
         ### CC
     
-        #the effective Hamiltonian for the WF level
-        F_A = molA.Femb()   # since the 'functional' is set at the beginning of the computation
-                            # the fock matrix reads as : hcore(embedding) + G_term(functional). 
-                            # In other words this lead to a  post HF-like calculation 
-                            # in which F =  Fock(functional) is used as starting point 
+        #the reference Fock
+        F_A = wfn_cc.Fa()  
+        
         E_DFT_in_DFT = FnT_ene # E_nuclear is included
  
-        if molA.func_name() == 'hf' :
-         E_inter2=np.einsum('pq,pq->', F_A +hcore_A_in_B , Da) 
-        else: 
-         E_inter2 = 2.0*np.einsum('pq,pq->', hcore_A_in_B , Da) + twoel_eneA
+        
+        E_inter2=np.einsum('pq,pq->', F_A +hcore_A_in_B , Da) # F_A is the WF (ref) Hamiltonian (modified by hcore), correlation energy summed below 
+    
  
         dft_correction = ene_sup-FnT_ene
-        tE_WF_in_DFT =  E_DFT_in_DFT -(Ecore + twoel_eneA) +E_inter2 +  ecorr
+        tE_WF_in_DFT =  E_DFT_in_DFT -(Ecore + frag_mag.twoel_ene) +E_inter2 +  ecorr
         E_WF_in_DFT = tE_WF_in_DFT +dft_correction 
         #print("E (WF-in-DFT) = %.8f" % E_WF_in_DFT)
         return E_WF_in_DFT

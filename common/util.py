@@ -45,6 +45,10 @@ class Molecule():
   def set_geometry(self,fgeom,label=False):
 
       self.__geometry=str()
+      #check on the file
+      if not os.path.isfile(fgeom):
+          print("File ", fgeom, " does not exist")
+          exit(1)
       with open(fgeom,'r') as data:
          self.__natom = int(data.readline()) # natom is the 'proper' 
                                            # number of atoms in the 

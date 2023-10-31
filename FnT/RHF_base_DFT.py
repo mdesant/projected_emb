@@ -3,158 +3,59 @@ import sys
 import re
 from scipy.linalg import fractional_matrix_power
 #sys.path.append(os.environ['PSIPATH'])
-from pkg_resources import parse_version
+
 import argparse
+import copy
+import numpy as np 
+from base_embedding import RHF_embedding_base
 
+class results:
+    frag : RHF_embedding_base
+    Da : np.ndarray = None 
+    Fa : np.ndarray = None 
+    Ca : np.ndarray = None
+    Hcore : np.ndarray  = None
+    twoel_ene : float
+    energy : float
+    Enuc : float
 
-def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_param, bset, bsetAA,\
-                          bsetBB, obs1, obs2, puream, embmol, wfn, isoA, isoB, debug, loewdin = False, supermol = False):
-
-
-    nb_tot = bset.nbf()
-    ndoccA = isoA.nalpha()
-    Cocc_AA = isoA.Ca_subset('AO','OCC')
-    print("DEBUG: Cocc[AA] match GS MOs %s" % np.allclose(Cocc_AA,isoA.Ca().np[:,:ndoccA]))
-    D_AA = isoA.Da()
-    C_AA = np.array(isoA.Ca())
-
-    Cocc_BB = isoB.Ca_subset('AO','OCC')
-    D_BB = isoB.Da()
-    ndoccB = isoB.nalpha()
-    C_BB = np.array(isoB.Ca())
-   
-    substr = acc_param.split(";")
-    if len(substr) !=3:
-        raise Exception("Wrong SCF_OPTS input.\n")
-    acc_opts = [substr[0],float(substr[1]),substr[2]]
-
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    print("@ Acceleration scheme : %s" % acc_opts[0])
-
-    if acc_opts[0] == 'lv_shift':
-       print("@ shift param : %.2f" % acc_opts[1])
-    else:
-       print("@ lenght error vector : %i" % acc_opts[1])
-    if acc_opts[0] != 'lv_shift':
-       print("@ Acceleration type : %s\n" % acc_opts[2])
-    else:
-       print()
-
-    nAA=bsetAA.nbf() #the number of basis funcs of subsys A
-
-
-
-    #mints object for bset_super
-    #print("functions in frag A: %i" % nAA)
-    mints = psi4.core.MintsHelper(bset)
-
-    V = np.asarray(mints.ao_potential())
-    T = np.asarray(mints.ao_kinetic())
-
-    # Build H_core: [Szabo:1996] Eqn. 3.153, pp. 141
-
-    Hcore = T+V
-
-    #the ovap matrix for the {A} U {B} basis set
-    S = np.array(mints.ao_overlap())
-   
-    
-    ndocc = wfn.nalpha()
-    ref_energy = wfn.energy()
-
+def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
 
     #DFT_in_DFT block
     # Set tolerances
     #maxiter = 12
     E_conv = e_conv
-    D_conv = d_conv
     #
     # Setup data for DIIS
     t = time.time()
     E = 0.0
-    Enuc = embmol.nuclear_repulsion_energy()
     Eold = 0.0
     #Fock_list = []
     #DIIS_error = []
 
-    ##initialize Cooc_sup
-    Cocc_sup = np.zeros((nb_tot,ndocc))
-    ##assemble Cocc_sup
-    Cocc_sup[:nAA,:ndoccA] = Cocc_AA
-    Cocc_sup[nAA:,ndoccA:] = Cocc_BB
-    
-    if debug:
-       print("check Cocc_AA:  %s" % np.allclose(Cocc_sup[:nAA,:ndoccA],Cocc_AA))
-       print("check Cocc_BB:  %s" % np.allclose(Cocc_sup[nAA:,ndoccA:],Cocc_BB))
-       print("check Cocc_AB = 0:  %s" % np.allclose(Cocc_sup[:nAA,ndoccA:],np.zeros((nAA,ndoccB))) )
-       print("check Cocc_BA = 0:  %s" % np.allclose(Cocc_sup[nAA:,:ndoccA],np.zeros((bsetBB.nbf(),ndoccA))) )
-       test_ortho = np.matmul(Cocc_sup.T,np.matmul(S,Cocc_sup))
-       print("Cocc_sup are orthonormal ? %s" % np.allclose(test_ortho,np.eye(test_ortho.shape[0])))
-    
-    Dmat_sup = np.matmul(Cocc_sup,Cocc_sup.T)
-
-    Dold = np.zeros_like(Dmat_sup)
-    if args.debug:
-        traceDS = np.trace(np.matmul(Dmat_sup,S))
-        print("Check trace of initial guess total density: ... %.8f \n" % traceDS)
-    #cube_util.denstocube(embmol,bset,Dmat_sup,S,ndocc,"denstot_mono_check",L,Dx)
-    
-    #populate sub A base object
-    zA = args.chargeA
-
-    ########################################
-    # class RHF_embedding_base():
-    #
-    #   def __init__(self,nb_frag,ndocc_frag,nb_super,\
-    #                                 ndocc_super,funcname,tag)
-    ########################################
-    if supermol:
-        bsetA_in = bset
-        bsetB_in = bset
-        tmp = C_AA
-        C_AA = np.zeros((nb_tot,nb_tot))
-        C_AA[:nAA,:nAA] = tmp
-        # for MO energies listing
-        limitA = nb_tot
-        #
-        nBB = C_BB.shape[0]
-        tmp = C_BB
-        C_BB = np.zeros((nb_tot,nb_tot))
-        
-        C_BB[nAA:,:nBB] = tmp
-        limitB = limitA
-
-    else:
-        bsetA_in = bsetAA
-        bsetB_in = bsetBB
-        limitA = nAA
-        limitB = nb_tot-nAA
-
-    subA = RHF_embedding_base(bsetA_in.nbf(), ndoccA, nb_tot, ndocc, func_l, 'A',supermol=supermol)
-    subA.initialize(S, bsetA_in, bset, Hcore, C_AA,acc_opts,scf_type,debug=debug)
-    print("I am frag '%s' : initializing\n" % subA.whoIam())
-    ######################
-
-    #populate sub B base object
-    subB = RHF_embedding_base(bsetB_in.nbf(), ndoccB, nb_tot, ndocc, func_l, 'B',supermol=supermol)
-    subB.initialize(S, bsetB_in, bset, Hcore, C_BB,acc_opts,scf_type,debug=debug)
-    print("I am frag '%s' : initializing\n" % subB.whoIam())
-
-    
-
-    superdict ={'thaw' : subA, 'frozn' : subB}
+    from embed_util import FntFactory
+    #######################################################################
+    # class FntFactory():
+    #     def __init__(self,debug=False,loewdin=False,outfile=sys.stderr)
+    #######################################################################
     
     
-    jobrun = FntFactory(debug,loewdin)
+    debug_out = open("debug.out", "w")
+    
+    jobrun = FntFactory(debug,loewdin,debug_out)
+
+    jobrun.initialize(frag_container)
 
     #test
-    print("testing section ...")
-    jobrun.initialize(superdict)
+    print("testing section ...\n")
+    acc_type = frag_container[0].acc_scheme()
+    print("Using %s\n" % acc_type )
+    print("Status :")
+    jobrun.status()
+
+    #exit()
     print("Full basis : %s\n" % jobrun.is_full_basis())
-    jobrun.thaw_active()
-    jobrun.clean()
-    print("end testing ...\n")
-    debug_out = open("debug.out", "w")
+
     MAXITER = maxit
     t = time.time()
      
@@ -166,79 +67,114 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
     print("@ dE refers to the deviation of the actual genuine supermolecular energy with respect to the previous step @\n")
     for FnT_ITER in range(1, MAXITER + 1):
 
-            jobrun.initialize(superdict)
             E_step, E_sup, dRMS = jobrun.thaw_active() 
+            
             print('FnT Iteration %3d: Frag = %s Energy = %4.12f  dE(sup) = % 1.5E  dRMS = % 1.5E %s'
-                      % (FnT_ITER,superdict['thaw'].whoIam(), E_step, (E_sup-Eold_sup), dRMS, superdict['thaw'].acc_scheme()   ))
+                      % (FnT_ITER,jobrun.thawed_id(), E_step.real, (E_sup-Eold_sup), dRMS, acc_type ))
+            
             if debug:
-               debug_out.write('FnT Iteration %3d: Frag = %s Energy(Im) = %.16e\n' % (FnT_ITER,superdict['thaw'].whoIam(),E_step.imag) )
-            #swap dictionary values
-            superdict.update({'thaw': superdict['frozn'],'frozn': superdict['thaw']})
+               debug_out.write('FnT Iteration %3d: Frag = %s Energy(Im) = %.16e\n' % (FnT_ITER,jobrun.thawed_id(),E_step.imag) )
+            
+            jobrun.finalize()  # the role active-frozen is assigned here
+            
             if abs(E_sup-Eold_sup) < E_conv:
               break
             Eold_sup = E_sup
+
             if FnT_ITER == MAXITER:
                 print("Maximum number of FnT cycles reached.\n")
     debug_out.close()    
     ###################################################################################
     print()
-    #print('Total time for FnT iterations: %.3f seconds \n\n' % (time.time() - t))
-    #print("FnT iterations : %i" % FnT_ITER)
-
-    if superdict['thaw'].whoIam() == 'B':   
-       superdict.update({'thaw': superdict['frozn'],'frozn': superdict['thaw']})
-    Cocc_sup = superdict['thaw'].Cocc_sum( superdict['frozn'].Ca_subset('OCC') )
-    Dmat_sup = np.matmul(Cocc_sup,Cocc_sup.T)
-    #get jk [ supermolecular]
-    jk = subA.jk_super()
-    Fock_sup,Jene,Exc = bo_helper.get_AOFock_JK(Dmat_sup,Cocc_sup,Hcore,jk,func_l,bset)
-    FH = np.matmul(Dmat_sup,Hcore)
-    SCF_E_test = 2.0*np.trace(FH) + Jene + Exc +Enuc
-    print("Final results:\n")
-    full_ovap = subA.full_ovapm()
-    res =  np.matmul(Cocc_sup.T,np.matmul(full_ovap,Cocc_sup))
-    print("Final occupied MOs are orthogonal: %s" % np.allclose(np.eye(Cocc_sup.shape[1]),res) )
-
-    subA.finalize()
-    subB.finalize()
-
-    # get final eigenvalues
-    eigvalA = np.asarray(subA.eigvals())
-    eigvalB = np.asarray(subB.eigvals())
-    
-    # fragment A orbital energies
-    print('Orbital Energies [Eh] for frag. "A"\n')
-
-    print('Doubly Occupied:\n')
-    for k in range(ndoccA):
-         print('%iA : %.6f' %(k+1,eigvalA[k]))
-
-    print('Virtual:\n')
-    for k in range(ndoccA,limitA):
-         print('%iA : %.6f'% (k+1,eigvalA[k]))
-    print()
-    
-    # fragment B orbital energies
-    print('Orbital Energies [Eh] for frag. "B"\n')
-
-    print('Doubly Occupied:\n')
-    for k in range(ndoccB):
-         print('%iA : %.6f' %(k+1,eigvalB[k]))
-
-    print('Virtual:\n')
-    for k in range(ndoccB,(limitB)):
-         print('%iA : %.6f'% (k+1,eigvalB[k]))
-
+    print('Total time for FnT iterations: %.3f seconds \n\n' % (time.time() - t))
+    print("FnT iterations : %i" % FnT_ITER)
     print()
 
-    print('Energy/Eh = %4.16f  dE = % 1.5E LOG10(|dE|) = % 1.5f'
-            % (SCF_E_test, SCF_E_test-ref_energy, np.log10(abs(SCF_E_test-ref_energy)) ))
+    print("Final Status :")
+    jobrun.status()
+    # get final eigenvalues for each fragment and identify fragment 1
+    #print epsilon_a using a loop
+
+    final_container = frag_container[1].copy()
+    final_container.insert(0,frag_container[0])
+
+    #identify fragment 1
+    #set from input #TODO
+
+    #frag_id = 1 default arg, acceptable values [1,2..]
+    if  len(final_container) < frag_id <1:
+        raise ValueError("frag_id must lie between 0 and max_num_frag\n")
+    selected_id = 0
+    other_frag = []
+    for num_idx,frag in enumerate(final_container):
+        if frag.whoIam() == frag_id:
+           selected_id = num_idx
+        else: # gather the other fragments
+           other_frag.append(frag)
+    #define the supermolecule C_occ
+
+    frag_1 = final_container[selected_id]
+    res_gather = frag_1.Cocc_gather(other_frag)
+
+    #check if the MOs are orthonormal (in general this happen only in the super-basis setting)
+    #full_ovap = frag_container[0].full_ovapm()
+    #res =  np.matmul(Cocc_sup.T,np.matmul(full_ovap,Cocc_sup))
+    #print("Final occupied MOs are orthogonal: %s" % np.allclose(np.eye(Cocc_sup.shape[1]),res) )
     
+    # the regular scf_energy goes here TODO
+    # just for the selected frag[1] basis
+    fock_frag_1,proj_1,SCF_E_test=frag_1.get_Fock(res_gather,return_ene=True)
+    # get also the two electron part
+    
+    # STEP for post-hf run
+    twoel_mtx, twoel_ene = frag_1.G()
+    # the effective Hamiltonian (core) of the selected fragment being embedded in the
+    # other  fragments potential
+    Hcore_1 = fock_frag_1 - twoel_mtx + proj_1
+    Da_frag_1 = frag_1.Da()
+    
+    jk = frag_1.get_jk()
+    jk.C_left_add(psi4.core.Matrix.from_array(frag_1.Ca_subset('OCC')) )
+    jk.compute()
+    jk.C_clear()
+    
+    J_mtx = np.asarray( jk.J()[0] )
+    K_mtx = np.asarray( jk.K()[0] )
+    # we have to add J-K (based on the density/orbitals of frag_1)
+    Fock_ref =  Hcore_1 +2.0*J_mtx -K_mtx
+    
+    # from Fock_ref
+    ene_ref = np.trace(np.matmul(Fock_ref+Hcore_1,Da_frag_1))+frag_1.mol().nuclear_repulsion_energy()
+    print("REF energy (ref Fock: hcore_a_in_b +2J-k) : %.8e\n" % ene_ref)
+     
+    print("CHECK: Fock[emb] is (%i x %i)\n" % fock_frag_1.shape)
+    jk.finalize()
+    
+    # for imaginary-time propagation orb. energies are not available
+    if frag_1.acc_scheme() != 'imag_time':  
+       for frag in final_container: 
+           epsilon_a = np.array(frag.eigvals())
+           # fragment ith orbital energies
+           print('Orbital Energies [Eh] for frag. %i\n' % frag.whoIam() )
+     
+           print('Doubly Occupied:\n')
+           for k in range(frag.ndocc() ):
+               print('%iA : %.6f' %(k+1,epsilon_a[k]))
+     
+           print('Virtual:\n')
+           for k in range(frag.ndocc(),frag.nbf()):
+               print('%iA : %.6f'% (k+1,epsilon_a[k]))
+           print()    
+           print("HOMO-LUMO gap\n")
+           gap = -epsilon_a[frag.ndocc()-1] + epsilon_a[frag.ndocc()] 
+           print("%.5e Eh / %.5e eV\n" % (gap,gap*27.2114) )
+
+    # MOVE    
     #print("One electron energy : %.8f\n" % (2.0*np.trace(FH)))
     #print("Coulomb energy :  %.8f\n" % Jene)
     #print("DFT XC energy :  %.8f\n" % Exc)
 
-    psi4.core.clean()
+    #psi4.core.clean()
     #refresh the molecule object
     psi4.set_options({'cubeprop_tasks': ['density','orbitals'],
                       'cubeprop_orbitals': [1,2,3], # just some  orbitals
@@ -246,29 +182,30 @@ def run(fgeomA, fgeomB, scf_type, numpy_mem, func_l, maxit, e_conv, d_conv, acc_
                       'CUBEPROP_ISOCONTOUR_THRESHOLD' : 1.0,
                       'CUBIC_GRID_SPACING' : [0.2,0.2,0.2]})
     
-
-    isoA.Ca().copy(psi4.core.Matrix.from_array(subA.Ca_subset('ALL') ))
-    isoA.Cb().copy(psi4.core.Matrix.from_array(subA.Ca_subset('ALL') ))
-      
-
-    isoA.Da().copy(psi4.core.Matrix.from_array(subA.Da() ))
-    isoA.Db().copy(psi4.core.Matrix.from_array(subA.Da() ))
-
-    isoA.Fa().copy(psi4.core.Matrix.from_array(subA.Femb()) )
-    isoA.Fb().copy(psi4.core.Matrix.from_array(subA.Femb()) ) 
- 
-    # quick test
-    _F = subA.Femb()
-    rtest = np.isrealobj(_F)
-    print("Fock (emb) is real : %s" % rtest)
-
-    if (acc_opts[0] != 'imag_time'):
-       _C = subA.Ca_subset('ALL')
-       test = np.matmul(_C.T,np.matmul(_F,_C))
-       diag_test = np.diagflat(np.diagonal(test))
-       print("Fock is diagonal : %s" % np.allclose(test,diag_test,atol=1.0e-8))
+    #TODO
+    #dataclass
+    res_container = results
+    res_container.frag = frag_1
+    res_container.Ca = frag_1.Ca_subset('ALL')
+    res_container.Fa = Fock_ref
+    res_container.energy = ene_ref
+    res_container.Hcore = Hcore_1
+    res_container.Da = frag_1.Da()
+    res_container.twoel_ene = twoel_ene
+    res_container.Enuc = frag_1.mol().nuclear_repulsion_energy()
     
-    return subA, subB,SCF_E_test, isoA
+    # quick test
+    #_F = subA.Femb()
+    #rtest = np.isrealobj(_F)
+    #print("Fock (emb) is real : %s" % rtest)
+
+    #if (acc_opts[0] != 'imag_time'):
+    #   _C = subA.Ca_subset('ALL')
+    #   test = np.matmul(_C.T,np.matmul(_F,_C))
+    #   diag_test = np.diagflat(np.diagonal(test))
+    #   print("Fock is diagonal : %s" % np.allclose(test,diag_test,atol=1.0e-8))
+   
+    return E_sup,SCF_E_test,res_container
 ############################################################################
 
 if __name__ == "__main__":
@@ -278,11 +215,8 @@ if __name__ == "__main__":
     ####################################
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-gA","--geomA", help="Specify geometry file for the subsystem A", required=True, 
+    parser.add_argument("-g","--geom", help="Specify geometry file, including xyz, charge, and mult. of fragments,", required=True, 
             type=str, default="XYZ")
-    parser.add_argument("-gB","--geomB", help="Specify geometry file for the subsystem B", required=True, 
-            type=str, default="XYZ")
-    # test: use the total basis set instead of the mono molecular basis 
     parser.add_argument("-s", "--supermol", help="Do the projection in the supermolecular basis", required=False,
             default=False, action="store_true")
    
@@ -291,8 +225,13 @@ if __name__ == "__main__":
 
     parser.add_argument("-o1","--obs1", help="Specify the orbital basis set for subsys A", required=False, 
             type=str, default="6-31G*")
-    parser.add_argument("-o2","--obs2", help="Specify the general orbital basis set", required=False, 
-            type=str, default="6-31G*")
+
+    # density fitting
+    parser.add_argument("--df_basis", help="Specify the aux basis set for SCF", required=False, 
+            type=str, default="cc-pvdz-jkfit")
+    parser.add_argument("--df_basis_cc", help="Specify the aux basis set for CC", required=False, 
+            type=str, default="cc-pvdz-jkfit")
+
     parser.add_argument("--puream", help="Pure AM basis option on", required=False,
             default=False, action="store_true")
     parser.add_argument("--df_guess", help="Density-fitted pre-scf on", required=False,
@@ -307,6 +246,9 @@ if __name__ == "__main__":
             default="cc_out.txt", type = str)
     parser.add_argument("-f","--func", help="Specify the low level theory functional", required=False, 
             type=str, default="blyp")
+    parser.add_argument("--wf_frag", help="Select the fragment for post-hf", required=False,
+            default=1, type = int)
+
     parser.add_argument("--e_conv", help="Convergence energy threshold",required=False,
             default=1.0e-7, type = float)
     parser.add_argument("--d_conv", help="Convergence density threshold",
@@ -314,25 +256,20 @@ if __name__ == "__main__":
     parser.add_argument("--scf_opts", help="Select SCF acceleration options : accel_scheme;maxvec;type (default : diis;6; None )", required=False,
             default="diis;6; None", type=str)
     # accel_scheme : diis|list, max_vec = N, type : direct|indirect|better|None
+    
     parser.add_argument("--loewdin", help="Activate Intermediate Loewdin orthogonalization (on Cocc[sup]->Fock) ", required=False,
             default=False, action="store_true")
     parser.add_argument("-m", "--numpy_mem", help="Set the memeory for the PSI4 driver (default 2 Gib)", required=False,
             default=2, type = int)
 
-    parser.add_argument("-z", "--charge", help="Charge of the whole system",
-            default=0, type = int)
-    parser.add_argument("-zA", "--chargeA", help="Charge of Frag. A",
-            default=0, type = int)
-    parser.add_argument("-zB", "--chargeB", help="Charge of Frag. B",
-            default=0, type = int)
-    parser.add_argument("-mA", "--multA", help="Multiplicity (2S+1) of Frag. A",
-            default=1, type = int)
-    parser.add_argument("-mB", "--multB", help="Multiplicity of Frag. B",
-            default=1, type = int)
     parser.add_argument("--maxit", help="Max number of iterations (default : 20)", required=False,
-            default=4, type = int)
+            default=20, type = int)
     parser.add_argument("--mod_path", help="Specify path of common modules", required=False, 
             type=str, default="/home/matteo/projected_emb/common")
+    parser.add_argument("--cc_native", help="Use cc native psi4 implementation", required=False,
+            default=False, action="store_true")
+    parser.add_argument("--lv", help="Use level-shift operator instead of Huzinaga", required=False,
+            default=False, action="store_true")
 
     
     args = parser.parse_args()
@@ -348,28 +285,93 @@ if __name__ == "__main__":
     import psi4
     import numpy as np
     import helper_HF
-    from util import Molecule
+    #from util import Molecule
     from init import initialize
-    from base_embedding import RHF_embedding_base
-    from embed_util import FntFactory
+    #from base_embedding import RHF_embedding_base
+    #from embed_util import FntFactory
     
     import util
     import bo_helper
 
-    bset,bsetAA,bsetBB,supermol,wfnAB,ene_vanilla,isoA,isoB = initialize(args.scf_type,args.df_guess,args.obs1,\
-                                                    args.obs2,args.puream,args.geomA,args.geomB,args.func,args.cc_type,args.cc_maxit,args.e_conv,args.d_conv,\
-                                                    args.charge,args.chargeA,args.multA,args.chargeB,args.multB)
-   
+    # wfn_list contains the wfn (psi4) object for each frag
+    frags_container, psi4mol, wfn_list = initialize(args.scf_type, args.df_guess, args.obs1, args.puream,\
+                                                        args.geom, args.func, args.scf_opts, args.e_conv,\
+                                                        args.d_conv, args.lv, args.cc_type,args.cc_maxit, args.debug,\
+                                                        args.supermol,args.df_basis,args.df_basis_cc)
+    
+    #exit() 
+    Enuc = psi4mol.nuclear_repulsion_energy()
     # main function ,update isoA
-    subA, subB, FnT_ene, isoA = run(args.geomA, args.geomB, args.scf_type,\
-                             args.numpy_mem, args.func, args.maxit, args.e_conv, args.d_conv, args.scf_opts,\
-                             bset, bsetAA, bsetBB, args.obs1, args.obs2, args.puream, supermol, wfnAB, isoA, isoB, args.debug, args.loewdin, args.supermol)
+    Esup, scf_e_test, res_container= run(frags_container, args.e_conv, args.maxit, args.debug, args.loewdin,args.wf_frag)
+
+    # do a genuine psi4 calculation on the super-system
+    ene_ref_sup =  psi4.energy(args.func,molecule=psi4mol)
+    ene_diff = abs(ene_ref_sup - (scf_e_test+Enuc))
+
+    print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n")
+
+    print('Energy/Eh = %4.16f  dE = % 1.5E LOG10(|dE|) = % 1.5f'
+            % (scf_e_test+Enuc, ene_diff, np.log10(abs(ene_diff)) ))
+
+    # TODO: use a molecule with ghosted fragment if the supermolecule calculation is performed
+    if args.supermol:
+        ghost_frags = [x+1 for x in range(len(wfn_list))]
+        ghost_frags.pop(args.wf_frag-1)
+        psi4mol.set_ghost_fragments(ghost_frags)
+        ene_x,wfn_cc=psi4.energy(args.func, molecule=psi4mol, return_wfn=True)
+    else:
+        wfn_cc = wfn_list[args.wf_frag-1]
     import ccsd_native
     import ccsd_conv
-    if args.cc_type is not None :
-        print("Starting ccsd calculation")
-        ene_wf_dft = ccsd_native.wfn_in_dft(subA,subB,isoA,args.cc_outfile,ene_vanilla,FnT_ene,wf_type='ccsd')
 
+    if args.cc_type is not None :
+     
+        print("TEST: get ref energy using unmodified Hcore\n")
+        basis_frag_1=wfn_cc.basisset()
+        mints_frag_1 = psi4.core.MintsHelper(basis_frag_1)
+        H_unmod = np.array(mints_frag_1.ao_kinetic()) + np.array(mints_frag_1.ao_potential())
+        Fock_0 =  res_container.Fa -res_container.Hcore +H_unmod
+        ene_test = np.trace(np.matmul(Fock_0+H_unmod,res_container.Da)) + res_container.Enuc
+    
+        print("REF energy (ref Fock: H0 +2J-k) : %.8e\n" % ene_test)
+        # This reference energy (from umodified Hcore) would pop-up in cc output
+        # if Hcore_modified (A_in_B) is not copied in the H() variable of wfn_cc
+        # despite not affecting the correlation energy, since we copy-in the "effective"
+        # Fock (Hcore_A_in_B +2J-K) and Da, Ca coefficients.
+        
+        #copy into wfn_cc
+        wfn_cc.Da().copy(psi4.core.Matrix.from_array(res_container.Da))
+        wfn_cc.Fa().copy(psi4.core.Matrix.from_array(res_container.Fa))
+        wfn_cc.H().copy(psi4.core.Matrix.from_array(res_container.Hcore))
+        wfn_cc.Ca().copy(psi4.core.Matrix.from_array(res_container.Ca))
+        wfn_cc.Db().copy(psi4.core.Matrix.from_array(res_container.Da))
+        wfn_cc.Fb().copy(psi4.core.Matrix.from_array(res_container.Fa))
+        wfn_cc.Cb().copy(psi4.core.Matrix.from_array(res_container.Ca))
+        wfn_cc.set_energy(res_container.energy) 
+        
+        
+        if res_container.frag.func_name().upper() == 'HF':
+           ref_wfn_type = 'rhf'
+        else:
+
+           ref_wfn_type = 'rhf'  # PROBLEM
+        print("Reference wfn(CC) : %s\n" % ref_wfn_type)
+
+        psi4.set_options({'cc_type': args.cc_type,
+                        'cachelevel': 0,
+                        'reference': ref_wfn_type,
+                        'df_basis_cc' : args.df_basis_cc,
+                        'freeze_core' : False,
+                        'mp2_type': 'conv',
+                        'MP2_AMPS_PRINT' : True,
+                         'maxiter' : args.cc_maxit})
+
+
+        print("Starting ccsd calculation")
+    #%%% wfn_in_dft(frag_cc,wfn_cc,cc_outfile,ene_sup,FnT_ene,wf_type='ccsd') %%%%
+        if args.cc_native:
+           ene_wf_dft = ccsd_native.wfn_in_dft(res_container,wfn_cc,args.cc_outfile,ene_ref_sup,scf_e_test,wf_type='ccsd')
+        else:
+           ene_wf_dft = ccsd_conv.wfn_in_dft(res_container,wfn_cc,ene_ref_sup,scf_e_test,args.numpy_mem)
         print ("Energy : WF-in-%s energy : % 4.12f" %  (args.func.upper(),ene_wf_dft) )
         # hardcoded ccsd 
-        #ccsd_conv.wfn_in_dft(subA,subB,isoA,ene_vanilla,FnT_ene,args.numpy_mem)

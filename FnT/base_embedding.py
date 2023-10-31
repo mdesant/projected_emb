@@ -11,14 +11,83 @@ __date__      = "2022-03-01"
 import sys
 import os
 sys.path.insert(0,'../common')
+modpaths = os.environ.get('RTUTIL_PATH')
+
+if modpaths is not None :
+    for path in modpaths.split(";"):
+        sys.path.append(path)
+
 import it_util
 import numpy as np
 import psi4
-from pkg_resources import parse_version
+#deprecated
+#from pkg_resources import parse_version
+from packaging import version
 import helper_HF
 import LIST_help
 import scipy
 from scipy.linalg import fractional_matrix_power
+
+from dataclasses import dataclass
+
+import warnings
+warnings.filterwarnings('ignore')
+@dataclass
+class fock_common:
+    nbf: int 
+    nbf_tot: int 
+    docc_num  : int   # the number of doubly occuopied MO of the fragment
+    Hcore : np.ndarray 
+    ovap  : np.ndarray 
+    mono_basis : psi4.core.BasisSet
+    sup_basis  : psi4.core.BasisSet
+    jk      : psi4.core.JK
+    jk_mono : psi4.core.JK
+    func_name : str = "blyp"
+    frag_id   : int = 1
+
+    
+def get_geom_frag(frag_id,fragment_list):
+    if not isinstance(fragment_list,list):
+        raise TypeError("Check frag_list\n")
+    atoms_id = fragment_list[frag_id-1] # frag_id >=1; atoms_id is a tuple (init_at,final_at)
+    if not isinstance(atoms_id,tuple):
+        raise TypeError("Check atoms' id\n")
+    natom = atoms_id[1]-atoms_id[0]
+    #print("n. atoms : %i\n" % natom)
+    #the atom centers in the the total molecule
+    atom_centers = [int(m) for m in range(atoms_id[0],atoms_id[1])] 
+    #print(atom_centers)
+    return atom_centers
+
+def get_JK(target,psi_mol,basis_object):
+      if target == 'DF' or target == 'MEM_DF' or target == 'DISK_DF':
+          print("DEBUG->target: %s\n" % target)
+          auxb = psi4.core.BasisSet.build(psi_mol, "DF_BASIS_SCF", "",\
+                                          fitrole="RIFIT",other=basis_object.name())
+          jk_factory = psi4.core.JK.build(basis_object,auxb)
+      else:
+          #print("DEBUG->target: %s\n" % target)
+          try:
+            jk_factory = psi4.core.JK.build(basis_object)
+          except ValueError:
+            print("Error in psi4.core.JK.build\n")
+ 
+      try:
+         jk_factory.set_do_wK(False)
+      except ValueError:
+         print("Error in psi4.core.JK.set_do_wK\n")
+
+      try:
+         jk_factory.print_header()
+      except ValueError:
+         print("Error in psi4.core.JK.print_header\n")
+      
+      try:
+         jk_factory.initialize()
+      except ValueError:
+         print("Error in psi4.core.JK.initialize(self)\n")
+      return jk_factory 
 ##################################################################
 # acc_opts = [kind, maxvec, variant=None]
 #    kind : 'diss' | 'list_(i/d)' (type=str)
@@ -26,97 +95,172 @@ from scipy.linalg import fractional_matrix_power
 #    variant : Use the transposed 'B' matrix? (type=bool)
 class RHF_embedding_base():
 
-  def __init__(self,nb_frag,ndocc_frag,nb_super,\
-                                ndocc_super,funcname,tag,fout=sys.stderr,supermol=False):
+  def __init__(self,molobj, ndocc_frag,\
+                    ndocc_super,funcname,id_frag,fout=sys.stderr,supermol=False,flag_lv=False):
+      # molobj is the molecule (psi4.core.Molecule) corresponding to the total system
       self.__eps = None
       self.__Cocc = None
       self.__Ccoeff = None
       self.__C_midb = None      # aux MO coeff at previous midpont for imaginary time prop
-      self.__tagname = None
+      self.__frag_id = None
       self.__scfboost = None
       self.__Femb = None   # ?
       self.__accel = None
       self.__acc_opts = None
       self.__bset_mono = None   # fragment basisset
       self.__bset_sup = None    # supermolecular basisset
+
       self.__jk_mono = None     # JK object built  from fragment basis
       self.__jk_sup = None      # JK object built from supermol basis
       self.__Honeel = None      # one electron supramolecular Hamiltonian
+
       self.__S = None           # {AB} basis function overlap
+      self.__ovap_mono = None   # 'fragX' basis function overlap , X=A,B
       self.__ortho = None       # Ortho = S_xx^{-0.5} x= A,B
-      self.__nbf = nb_frag
+
+      self.__nbf = None
+      self.__nb_super = None
+
       self.__ndocc = ndocc_frag
-      self.__nb_super = nb_super
       self.__ndocc_super = ndocc_super
       self.__funcname = funcname
-      self.set_tag(tag)
+
+      self.__frag_id = id_frag
+      
       self.__stdout = fout
       self.__supermol = supermol
-  def initialize(self,ovap,basis_mono,basis_sup,Hsup,Ccoeff,acc_opts,target='direct',debug=False):
-      self.__S = ovap
-      if self.__tagname == 'A':
-        ovap_sub = ovap[:self.__nbf,:self.__nbf]
-      elif self.__tagname == 'B':
-        ovap_sub = ovap[-self.__nbf:,-self.__nbf:]
-      self.__ortho = fractional_matrix_power(ovap_sub, -0.5)
+      self.__sup_mol = molobj # the 'super' molecule object 
+      self.__frag_list = molobj.get_fragments()
+      self.__sup_mol.activate_all_fragments()
+      self.__frag_mol = molobj.extract_subsets(id_frag) # the fragment molecule extracted
+                                                        # from the 'super'
+      #check natom of the fragment and point group
+      print("frag %i contains %i atoms\n" % (self.__frag_id,self.__frag_mol.natom()) )
+      print(".. belongs to point group %s\n" % self.__frag_mol.point_group().full_name())
+      self.__frag_mask = None
+      self.__frag_notmask = None
+      self.__limit = None
+      self.__fake_limit = None
+      self.__fake_mask = None
+      self.__e_scf = None
+
+      #for lv_shift projector
+      self.__muval = None
+      self.__do_lv = flag_lv
+
+###########################################
+  def mol(self):
+      return self.__frag_mol
+  def set_jk(self,jk_factory):
+      self.__jk_mono = jk_factory
+  def set_e_scf(self,ene):
+      self.__e_scf = ene
+  def e_scf(self):
+      return self.__e_scf
+###########################################
+  def initialize(self,ovap_sup,basis_sup,basis_mono,\
+                     Hsup,Ccoeff,acc_opts,target='direct',debug=False,muval=1.0e6):
+      self.__debug = debug
+      self.__muval = muval
+      # assign
+      self.__bset_sup =   basis_sup
+
+      if self.__supermol:
+         self.__bset_mono =  basis_sup
+      else:
+         self.__bset_mono =  basis_mono
 
 
+      self.__nbf = self.__bset_mono.nbf()
+      self.__nb_super = self.__bset_sup.nbf()
+      
+      # needed only if the fock has to be evaluated in place
+      scf_common = fock_common
+
+      scf_common.nbf     = self.__nbf
+      scf_common.nbf_tot = self.__nb_super
+      scf_common.docc_num = self.__ndocc  # the number of doubly occuopied MO
+                                          # of the fragment
+      scf_common.Hcore    = Hsup
+      scf_common.ovap     = ovap_sup 
+      scf_common.ovap_mono = None
+      scf_common.mono_basis = self.__bset_mono
+      scf_common.sup_basis  = self.__bset_sup
+      scf_common.func_name  = self.__funcname
+      scf_common.frag_id    = self.__frag_id
+      ############################################
+      #assign
+      self.__S = ovap_sup
+
+      # call set_mask, for the general absolute-locazation case
+      self.set_mask()
+
+      if self.__supermol:
+          self.__fake_limit = self.__limit
+          self.__fake_mask  = self.__frag_mask
+          
+          # re-define:
+          # self.__attr (attr=frag_mask ..) will point to a different memory location
+          self.__frag_mask = [True for m in range(self.__nb_super)]
+          self.__frag_notmask = [True for m in range(self.__nb_super)]
+          self.__limit = (0,self.__nb_super-1)
+
+      #get mask
+      mask = self.__frag_mask
+      
+      ovap_mono = ovap_sup[mask,:][:,mask]
+      self.__ovap_mono = ovap_mono
+      #check
+      if ovap_mono.shape[0] != self.__nbf:
+         print("ovap_mono.dim[0] : %i, nbf : %i\n" % ( ovap_mono.shape[0],self.__nbf ) )
+         raise Exception("Something went wrong with basis set dimension\n")
+      
+      scf_common.ovap_mono = ovap_mono
+      
+      self.__ortho = fractional_matrix_power(ovap_mono, -0.5)
 
       self.__Cocc =   np.array(Ccoeff)[:,:self.__ndocc]
       self.__Ccoeff = np.array(Ccoeff)
 
-      #JK object (monomol basis)
-      self.__bset_mono =  basis_mono
-      basis_name = basis_mono.name()
+      target = target.upper() # JK target 
+      # test debug
+      #
+      try:
+        result_sup = get_JK(target,self.__sup_mol,basis_sup)
+      except ValueError:
+          raise
 
-      target = target.upper()
-      if target == 'DF' or target == 'MEM_DF' or target == 'DISK_DF':
-          auxb = psi4.core.BasisSet.build(embmol,"DF_BASIS_SCF", "", fitrole="JKFIT",other=basis_name)
-          jk = psi4.core.JK.build_JK(basis_mono,auxb)
+      result_sup.initialize()
+
+      self.__jk_sup= result_sup
+      if (self.__jk_sup is None):
+         raise Exception("Error in JK instance")
+      #
+      if not self.__supermol  :
+         # get JK on the mono-molecular basis
+         result_mono = get_JK(target,self.__frag_mol,basis_mono)
+         #result_mono.initialize()
+
+         self.__jk_mono = result_mono
       else:
-          jk = psi4.core.JK.build(basis_mono)
-      jk.set_memory(int(4.0e9))  # 1GB
-      jk.set_do_wK(False)
-      jk.initialize()
+         self.__jk_mono = result_sup # it points to the same memory location of __jk_sup
 
-      self.__jk_mono = jk
       if (self.__jk_mono is None):
          raise Exception("Error in JK instance")
       
-      # set the total basis set object
-      self.__bset_sup =  basis_sup
-
-      if not self.__supermol:          # if the mono molecular basis set != super mol. basis set
-          #JK object (supermol basis)
-          basis_name = basis_sup.name()
-          if target == 'DF' or target == 'MEM_DF' or target == 'DISK_DF':
-              auxb = psi4.core.BasisSet.build(embmol,"DF_BASIS_SCF", "", fitrole="JKFIT",other=basis_name)
-              jk_sup = psi4.core.JK.build_JK(basis_sup,auxb)
-          else:
-              jk_sup = psi4.core.JK.build(basis_sup)
-          jk_sup.set_memory(int(4.0e9))  # 1GB
-          jk_sup.set_do_wK(False)
-          jk_sup.initialize()
-
-          self.__jk_sup = jk_sup
-      else:
-          self.__jk_sup = jk
-
-      if (self.__jk_sup is None):
-         raise Exception("Error in JK instance")
+      print("JK of the frag(%i) is built on a basis counting %i funcs\n" \
+                  % (self.whoIam(),self.__jk_mono.basisset().nbf() ))
 
       # H core
       if (Hsup.shape[0] != self.__nb_super):
          raise Exception("Wrong Hsup dim[0]")
 
       self.__Honeel = Hsup
+      
 
-      if self.__supermol: # if the supermolecular basis is used , for the imaginary time  propagation we opt for the orthogonalized atomic basis , as propagation basis 
-        Vminus =   fractional_matrix_power(ovap, -0.5)      
-      else:
-        Vminus = Ccoeff
-      # prepare a dictionary of commons
-      scf_common = {'nbf' : self.__nbf, 'nbf_tot': self.__nb_super, 'occ_num' : self.__ndocc,  'Hcore' : Hsup, 'ovap':ovap,'mono_basis': basis_mono, 'sup_basis': basis_sup,'jk' : self.__jk_sup, 'jk_mono' : self.__jk_mono, 'ftype' : self.__funcname, 'frag_id': self.__tagname}
+      # set jk in scf_common
+      scf_common.jk = self.__jk_sup
+      scf_common.jk_mono = self.__jk_mono
  
       self.__acc_opts = acc_opts
  
@@ -124,14 +268,99 @@ class RHF_embedding_base():
       self.__accel = acc_opts[0]
       # set the acceleration method and initialize
       max_vec = int(acc_opts[1])
+      
+      # if the supermolecular basis is used , for the imaginary time  propagation 
+      # we opt for the orthogonalized atomic basis , as propagation basis (?)
+      if self.__supermol and (self.__accel == 'imag_time'): 
+        print("here")
+        Vminus =   self.__ortho 
+      else:
+        Vminus = Ccoeff
+ 
+      # define the initial Cocc  used in list and imag_time if supermol=True
+      if self.__supermol :
+          Cocc_in = self.Ca_subset('OCC',Csup_format=True)
+      else:
+          Cocc_in = self.__Cocc 
+      
       if self.__accel == 'diis':
           self.__scfboost = helper_HF.DIIS_helper(max_vec) 
       elif self.__accel == 'list':
-          self.__scfboost = list_baseclass(self.__Cocc,scf_common,acc_opts,debug)
+          raise Exception("UNSAFE, to fixed \n")
+      # list_baseclass ->    __init__(self,Cocc,scf_common,active_frag,list_opts,debug)
+          self.__scfboost = list_baseclass(Cocc_in, scf_common, acc_opts, debug)
       elif self.__accel == 'imag_time':
-          self.__scfboost = itime_base(Vminus,self.__Cocc,acc_opts,debug)   # D^{AO} = Vminus D^{orth} Vminus.T
+          diis_engine = helper_HF.DIIS_helper(max_vec=4)   
+          self.__scfboost = (itime_base(Vminus,Cocc_in,acc_opts,debug),diis_engine)   # D^{AO} = Vminus D^{orth} Vminus.T
       elif self.__accel == 'lv_shift':
           self.__scfboost = None
+      else:
+          raise ValueError("wrong keyword/not implemented\n")
+
+  def fake_limits(self):
+      if self.__fake_limit is None:
+        l1 = self.__limit[0]
+        l2 = self.__limit[1]
+      else:
+        l1 = self.__fake_limit[0]
+        l2 = self.__fake_limit[1]
+      return l1,l2  
+###################################################
+  def set_mask(self):
+    basis_mol = self.__bset_sup  
+    frag_list = self.__frag_list
+    id_frag   = self.__frag_id
+
+    frag_centers = get_geom_frag(id_frag,frag_list)
+ 
+    # test methods of the basis object
+    total_shell_frag = 0
+ 
+    tmp_ishell_list = []
+    nbf_tot = basis_mol.nbf()
+    nbf_mask = [False for m in range(nbf_tot)]
+ 
+    for catom in frag_centers:
+    # do loop on atoms of the fragment
+        nshell = basis_mol.nshell_on_center(catom)
+        #print("center : %i has %i shells\n" % (catom,nshell))
+ 
+        for shell_num in range(nshell):
+ 
+            total_shell_frag +=1
+ 
+            ishell_on_center = basis_mol.shell_on_center(catom,shell_num) #Return the 
+                                                                     #i’th shell on center.??
+            tmp_ishell_list.append(ishell_on_center)
+ 
+    #end loop atoms of the fragment   
+
+
+    max_num_ishell = max(tmp_ishell_list)
+    min_num_ishell = min(tmp_ishell_list)
+
+    func_to_shell = []
+
+    for func_id  in range(nbf_tot):
+        func_to_shell.append( basis_mol.function_to_shell(func_id) )
+
+    for idx,el in enumerate(func_to_shell):
+        if (min_num_ishell  <= el <= max_num_ishell):
+           nbf_mask[idx] = True
+
+    func_id_list = np.array([int(m) for m in range(nbf_tot)])
+    func_id_list = func_id_list[nbf_mask]
+    l1= func_id_list[0]
+    l2 = func_id_list[-1]
+    
+    self.__frag_mask = nbf_mask
+    self.__frag_notmask = [not x for x in nbf_mask]
+    self.__limit = (l1,l2)
+#####################################################################
+
+  #def set_tag(self,frag_iden):
+  #    if not isinstance(frag_iden,int)
+  #    self.__frag_id = frag_iden # a int type
 
   def diis(self):
       acc_type  = self.__accel
@@ -157,41 +386,99 @@ class RHF_embedding_base():
       res=self.__accel
       return res
 
-  def jk_super(self):
-      res = self.__jk_sup
+  def get_jk(self,kind='mono'):
+      if kind == 'mono':
+         res = self.__jk_mono
+      elif kind == 'super':
+         res = self.__jk_sup
+      else:
+          raise ValueError("Invalid keyword\n")
       return res
 
-  def get_Fock(self,Csup,return_ene=False):
-      
-      nbf = self.__nbf
-      nbf_tot = self.__nb_super
+  def get_Fock(self,Csup,return_ene=False,debug=False): #local debug
+      # C_sup is a tuple
+      if not isinstance(Csup,tuple):
+          raise TypeError("Csup must be a tuple\n")
+      #nbf = self.__nbf
+      #nbf_tot = self.__nb_super
       Hcore = self.__Honeel
-      ovap = self.__S
+      ovap = self.__S   #contains the sup-basis overlap mtx
       basis = self.__bset_sup
       jk = self.__jk_sup
       ftype = self.__funcname
-      frag_id = self.__tagname
-      occ_num = self.__ndocc
+      frag_id = self.__frag_id
 
-      fock,ene =  Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,basis,jk,ftype,frag_id)
+      fock,ene =  Fock_emb(Hcore,Csup[1],basis,jk,ftype,frag_id)#TODO
+      #make the projector
+      Cocc_list = Csup[0].copy() # necessario?
+      if not isinstance(Cocc_list,list):
+          raise TypeError("check Cocc_list\n")
+      Cocc_list.pop(0)  # the first place in the list belongs to thawed fragment MOs coeff.
+
+      tmp = Cocc_list[0]
+      for elm in Cocc_list[1:]:
+          tmp = np.append(tmp,elm,axis=1)
+      
+      # TEST
+      sup_D_frozen = np.matmul(tmp,tmp.T)
+
+      # get the slice of Fock and ovap and MO coeff
+      mask = self.__frag_mask
+      not_mask = self.__frag_notmask
+      #slice tmp (the gathered frozen Occ MO)
+      tmp = tmp[not_mask,:]
+      frozn_D = np.matmul(tmp,tmp.T)
+      #test the trace of frozn_D
+      #get a suitable ovapm
+      
+      ## TEST ##
+      lv_shift = self.__muval*np.matmul(ovap,np.matmul(sup_D_frozen,ovap))
+      lv_shift = lv_shift[mask,:][:,mask] 
+      
+      # for debug
+      #ovap_frozn = ovap[not_mask,:][:,not_mask]
+      #trace_frzn = np.trace(np.matmul(ovap_frozn,frozn_D))
+      #print("Tr[frozen_D S]: %.4e\n" % trace_frzn)
+      #print("Frozen D mat has dim (%i,%i)\n" % frozn_D.shape)
+      
+      #the off-diagonal block of fock and overlap
+      F_off = fock[mask,:][:,not_mask]
+      ovap_off = ovap[mask,:][:,not_mask] # ovap is symm
+      #print("F and S off-diagonal block have dim (%i,%i)\n" % (F_off.shape))
+
+      if self.__do_lv:
+        proj = lv_shift
+      else:
+        proj =  make_Huzinaga(F_off,ovap_off.T,tmp)
+
+      if debug :
+          proj = (proj,fock)
 
       if return_ene:
-       return fock,ene
+          return fock[mask,:][:,mask] ,proj, ene
       else:
-       return fock
+       return fock[mask,:][:,mask],proj
 
   def G(self,replace_func=None):
-
+    #check dimension consistency
     Cocc = self.__Cocc
     basis = self.__bset_mono
+    if Cocc.shape[0] != basis.nbf():
+        print("Cocc.dim[0] : %i, nbf : %i\n" %  (Cocc.shape[0], basis.nbf()) )
+        # handle the exception
+        nelm = basis.nbf()
+        Cocc = np.zeros((nelm,Cocc.shape[1]),dtype=np.float_)
+        try:        
+            Cocc[self.__fake_limit[0]:self.__fake_limit[1]+1, :] = self.__Cocc
+        except ValueError:
+            raise
+
     if replace_func is not None:
       Gmat,ene = twoel(Cocc,basis,self.__jk_mono,replace_func)
     else:
       Gmat,ene = twoel(Cocc,basis,self.__jk_mono,self.__funcname)
     return Gmat, ene
 
-  def set_tag(self,label):
-      self.__tagname = label
       
   def set_Femb(self,Fmat):
       if (Fmat.shape[0] != self.__nbf):
@@ -221,47 +508,80 @@ class RHF_embedding_base():
       else :
           raise Exception("check MOs usage")
           
-  def Ca_subset(self,tag='ALL'):
+  def Ca_subset(self,tag='ALL',Csup_format=False):#TODO 0
       if tag == 'OCC':
-          res =self.__Cocc
+          tmp =self.__Cocc
       elif tag == 'VIRT':
-          res = self.__Ccoeff[:,self.__ndocc:]
+          tmp = self.__Ccoeff[:,self.__ndocc:]
       elif tag == 'ALL':
-          res = self.__Ccoeff
+          tmp = self.__Ccoeff
+
+      res = tmp
+      #print("Ca_subset has dim : %i,%i\n" % res.shape)
+      
+      if Csup_format : # 
+          nbf =self.__nb_super
+          if self.__frag_mask is None:
+              raise Exception("frag. basis mask not intialized\n")
+          tmp_mtx = np.zeros((nbf,tmp.shape[1]),dtype=np.float_)
+          mask = self.__frag_mask
+          l1 = self.__limit[0]
+          l2 = self.__limit[1]
+
+          #print("l1,l2 = (%i,%i)\n" % (l1,l2))
+          if (l2-l1+1) !=self.__nbf:
+              print(l2-l1+1) 
+              raise Exception("check dimension\n")
+
+          if res.shape[0] != (l2-l1+1) :                                            # use fake_mask and fake_limit
+              tmp_mtx[self.__fake_limit[0]:self.__fake_limit[1]+1, :] = tmp.real    # this occurs in the first FnT 
+                                                                                    # iteration of a supermolecule-basis setting (-s)
+          else:
+              if self.__debug:
+                  print("Csup_format needed here\n")
+              tmp_mtx[l1:l2+1, :] = tmp.real
+
+          if self.__debug:
+             if np.iscomplexobj(tmp):
+                print("max |mtx.imag| %.4e\n" % np.max(np.abs(tmp.imag)) )
+          res = tmp_mtx
+
       return res
-  def Cocc_sum(self,Cmat):
+  #TODO 1
+  def Cocc_gather(self,frags_frozn,dest='OCC'):
+      if not isinstance(frags_frozn,list):
+          raise TypeError("check frag list\n")
       #print("Cmat dim : %i,%i\n" % (Cmat.shape)) 
-      nb_tot = self.__nb_super
-      ndocc_tot = self.__ndocc_super
-      Cocc_super = np.zeros( (nb_tot,ndocc_tot) )
+      #nb_tot = self.__nb_super
+      #ndocc_tot = self.__ndocc_super
+      #Cocc_super = np.zeros( (nb_tot,ndocc_tot) )
+
       #print("DEBUG Cocc_super is [%i,%i]" % (Cocc_super.shape[0],Cocc_super.shape[1]))
       #print("DEBUG Cocc (frag) is [%i,%i]" % (self.__Cocc.shape[0],self.__Cocc.shape[1]))
-      if self.__tagname == 'A':
-        #if self.__Cocc.shape[0] >self.nbf():
-        #  Cocc_super[:,:self.ndocc()] = self.__Cocc
-        #else:
-          Cocc_super[:self.nbf(),:self.ndocc()] = self.__Cocc
-          if self.__supermol:
-            Cocc_super[:,self.ndocc():] = Cmat
-          else:    
-            Cocc_super[self.nbf():,self.ndocc():] = Cmat
-      elif self.__tagname == 'B':
-        if self.__supermol:
-          Cocc_super[:,-self.ndocc():] = self.__Cocc
-          Cocc_super[:,:-self.ndocc()] = Cmat
-        else: 
-          Cocc_super[-self.nbf():,-self.ndocc():] = self.__Cocc
-          Cocc_super[:-self.nbf(),:-self.ndocc()] = Cmat
       
-      return Cocc_super
+      #set True
+      Csup_shape = True
+    
+      tmp = []
+
+      tmp.append(self.Ca_subset(dest,Csup_format=Csup_shape) )
+      for elm in frags_frozn:
+          mtx =elm.Ca_subset(dest,Csup_format=Csup_shape)
+          tmp.append(mtx)
+
+      res = tmp[0]
+      for mtx in tmp[1:]:
+          res = np.append(res,mtx,axis=1)
+
+      return (tmp,res)
  
 
   def set_eps(self,epsA):
 
       self.__eps=epsA
 
-  def molecule(self):
-      return self.__tagname
+  #def molecule(self):
+  #    return self.__tagname
 
   def Da(self):
       nbf = self.__nbf
@@ -278,22 +598,17 @@ class RHF_embedding_base():
      return self.__ortho
 
   def S(self):
-      if self.__tagname == 'A':
-        ovap_sub = self.__S[:self.__nbf,:self.__nbf]
-      elif self.__tagname == 'B':
-        ovap_sub = self.__S[-self.__nbf:,-self.__nbf:]
-      return ovap_sub
+      return self.__ovap_mono
+  
   def full_ovapm(self):
       return self.__S
-  #def H(self):
-  #
-  #    return self.__Honeel
+  
+  def H(self):
+  
+      return self.__Honeel
+  
   def whoIam(self):
-      return self.__tagname
-
-  def basis(self):
-
-      return self.__bset
+      return self.__frag_id
 
   def ndocc(self):
       return self.__ndocc
@@ -337,9 +652,11 @@ def make_Huzinaga(F_sub,ovap_sub,Cocc):
    dimS = ovap_sub.shape[0]
    if  (dimF != dimD) or (dimS != dimD):
        raise Exception("Wrong matrix shape.\n")
+
    tmp = np.matmul(F_sub,np.matmul(density,ovap_sub))
    projector = -1.*(tmp + tmp.T)
    #projector = -0.5*(tmp + tmp.T)# <- the 0.5 factor is already accounted in the density matrix (n/2 electrons)
+   
    return projector
 ############################################################################
 def twoel(Cocc,basis,jk_mono,funcname):
@@ -360,7 +677,7 @@ def twoel(Cocc,basis,jk_mono,funcname):
         
         restricted = True
         
-        if parse_version(psi4.__version__) >= parse_version('1.3a1'):
+        if version.parse(psi4.__version__) >= version.parse('1.3a1'):
            build_superfunctional = psi4.driver.dft.build_superfunctional
         else:
            build_superfunctional = psi4.driver.dft_funcs.build_superfunctional
@@ -396,9 +713,15 @@ def twoel(Cocc,basis,jk_mono,funcname):
 # the projector is added up
 # occ_boundary bounds the number of columns in C_sup  corresponding to 'A' frag
 # Csup has a 'fixed' structure Cocc[AB] = Cocc[A] (+) Cocc[B]
-def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
-
-
+def Fock_emb(Hcore,Csup,sup_basis,jk,ftype,frag_id=1):#TODO
+    
+    if not isinstance(Csup,np.ndarray):
+        raise TypeError("Csup must be numpy.ndarray\n")
+    # check also dimension
+    if Csup.shape[0] != sup_basis.nbf():
+        print("Csup.dim[0] : %i, sup_bf: %i\n" % ( Csup.shape[0],sup_basis.nbf() ))
+        raise Exception("wrong dimension of Csup\n")
+    nbf_tot = sup_basis.nbf()
     Dmat = np.matmul(Csup,Csup.T)
 
     jk.C_left_add(psi4.core.Matrix.from_array(Csup))
@@ -412,23 +735,6 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
         # get the energy
         ene = np.matmul( (Hcore+Fock_tmp),Dmat)
         ene = np.trace(ene)
-        if frag_id == 'A':
-            fock = Fock_tmp[:nbf,:nbf]
-
-            # get slice of each term % debug
-            #subHcore = Hcore[:nbf,:nbf]
-        
-            #J=np.array(jk.J()[0])[:nbf,:nbf] #frag 'A' basis set is in the left upper corner (J_AA)
-            #K=np.array(jk.K()[0])[:nbf,:nbf] #frag 'A' : K_AA
-        elif frag_id == 'B':
-            fock = Fock_tmp[-nbf:,-nbf:]
-             
-            # get slice of each term % debug
-            #subHcore = Hcore[-nbf:,-nbf:]
-            #J=np.array(jk.J()[0])[-nbf:,-nbf:] #frag 'B' basis set is in the right bottom corner (J_BB)
-            #K=np.array(jk.K()[0])[-nbf:,-nbf:] #frag 'B' : K_BB
-        else:
-            print("check fragment labels")
 
         #put the terms together
         #fock = subHcore + np.float_(2.0)*J -K
@@ -438,7 +744,7 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
         
         restricted = True
         
-        if parse_version(psi4.__version__) >= parse_version('1.3a1'):
+        if version.parse(psi4.__version__) >= version.parse('1.3a1'):
            build_superfunctional = psi4.driver.dft.build_superfunctional
         else:
            build_superfunctional = psi4.driver.dft_funcs.build_superfunctional
@@ -471,72 +777,67 @@ def Fock_emb(nbf,nbf_tot,occ_num,Hcore,ovap,Csup,sup_basis,jk,ftype,frag_id):
         ene = np.matmul(Dmat,Hcore)
         ene = 2.0*np.trace(ene)
         ene += 2.0*np.trace(np.matmul(Dmat,np.array(jk.J()[0])) )
-        ene =+ Exc
-
-        if frag_id == 'A':
-            fock = Fock_tmp[:nbf,:nbf]
-            #subHcore = Hcore[:nbf,:nbf]
-            #J=np.array(jk.J()[0])[:nbf,:nbf] #frag 'A' basis set is in the left upper corner (J_AA)
-            #V = np.asarray(V)[:nbf,:nbf] 
-        elif  frag_id == 'B':
-            fock = Fock_tmp[-nbf:,-nbf:]
-            #subHcore = Hcore[-nbf:,-nbf:]
-            #J=np.array(jk.J()[0])[-nbf:,-nbf:] #frag 'B' basis set is in the right bottom corner (J_BB)
-            #V = np.asarray(V)[-nbf:,-nbf:] 
-        else:
-            print("check fragment labels")
+        ene += Exc
+        
         # sum up
         #fock = subHcore + (2.00*J + V)
 
     
-    # make the projector
-    if nbf == nbf_tot: # the case of a supermolecul setting
-       if frag_id == 'A':
-           D_ext = np.matmul(Csup[:,occ_num:],Csup[:,occ_num:].T)
-       
-       elif  frag_id == 'B':
-           D_ext = np.matmul(Csup[:,:-occ_num],Csup[:,:-occ_num].T)
-       
-       if D_ext.shape[0] != nbf_tot:
-           raise Exception("Check dimension of D_ext (in Huzinaga)")
-       projector = -1.*( np.matmul(Fock_tmp,np.matmul(D_ext,ovap)) + np.matmul(ovap,np.matmul(D_ext,Fock_tmp)) ) 
-    else:    
-       if frag_id == 'A':
-           Fock_sub = Fock_tmp[:nbf,nbf:]
-           ovap_sub = ovap[:nbf,nbf:].T
-           #Cocc_ext is the  sublock of Cocc_sup  representing the orbitals of the frozen fragment
-           Cocc_ext = Csup[nbf:,occ_num:]
-       elif  frag_id == 'B':
-           Fock_sub = Fock_tmp[-nbf:,:-nbf]
-           ovap_sub = ovap[-nbf:,:-nbf].T
-           Cocc_ext = Csup[:-nbf,:-occ_num]
-       projector = make_Huzinaga(Fock_sub,ovap_sub,Cocc_ext)
-
-    return fock + projector, ene
+    return Fock_tmp , ene
 ############################################################################
 # helper class
 class F_builder():
     def __init__(self,scf_common):
         #unpack data for Fock evaluation
         # the number of basis function can be defined from basis.nbf()
-        self.__nbf = scf_common['nbf']               
-        self.__nbf_tot = scf_common['nbf_tot']
-        self.__fragocc = scf_common['occ_num']
-        self.__Honel = scf_common['Hcore']
-        self.__ovap = scf_common['ovap']
-        self.__sup_bas = scf_common['sup_basis']
-        self.__mono_bas = scf_common['mono_basis']
-        self.__jk = scf_common['jk']
-        self.__jk_frag = scf_common['jk_mono']
-        self.__funcname = scf_common['ftype']
-        self.__frag_name = scf_common['frag_id']
-    def get_Fock(self,Csup,return_ene=False):
-        fock,ene= Fock_emb(self.__nbf,self.__nbf_tot,self.__frag_occ,self.__Honel,self.__ovap,Csup,\
-                         self.__sup_bas,self.__jk,self.__funcname,self.__fragname)
-        if return_ene :
-            return fock,ene
+        self.__nbf = scf_common.nbf               
+        self.__nbf_tot = scf_common.nbf_tot
+        self.__fragocc = scf_common.docc_num
+        self.__Honel = scf_common.Hcore
+        self.__ovap = scf_common.ovap
+        self.__sup_bas = scf_common.sup_basis
+        self.__mono_bas = scf_common.mono_basis
+        self.__jk = scf_common.jk
+        self.__jk_frag = scf_common.jk_mono
+        self.__funcname = scf_common.func_name
+        #self.__frag_name = scf_common.frag_id
+    def get_Fock(self,Csup_gather,Dmat=None,frag_id='A',return_ene=False):
+
+        #input :nbf,
+        #       nbf_tot,
+        #       occ_num,
+        #       Hcore,ovap,
+        #       Csup,
+        #       sup_basis,
+        #       jk,ftype,
+        #       frag_id
+        if isinstance(Csup_gather,tuple):
+            Csup = Csup_gather[1]
         else:
-            return fock
+            Csup = Csup_gather   # temporary workaround
+        if np.iscomplexobj(Csup) or not isinstance(Csup,np.ndarray):
+                #diagonalize D.real
+                if not isinstance(Dmat,np.ndarray):
+                    raise TypeError("Dmat is not np.ndarray\n")
+                tmp = np.matmul(self.__ovap,np.matmul(Dmat.real,self.__ovap))
+                w,eigvec = scipy.linalg.eigh(tmp,self.__ovap)
+                idx = w.argsort()[::-1]
+                eigvec = (eigvec[:,idx])[:,:self.__fragocc]
+                Csup_inp = eigvec
+
+        else:
+                Csup_inp =  Csup
+        
+        #def Fock_emb(Hcore,Csup,sup_basis,jk,ftype,frag_id=1):#TODO
+        
+
+        fock,ene= Fock_emb(self.__Honel, Csup_inp,\
+                         self.__sup_bas, self.__jk, self.__funcname)
+        proj = np.zeros_like(fock) # <- dummy,please define a regular projector
+        if return_ene :
+            return fock,proj,ene
+        else:
+            return fock,proj
 ############################################################################
 class list_baseclass():
     ###
@@ -554,6 +855,7 @@ class list_baseclass():
         self.__D_m     = None  # Density matrix extrapolated
         self.__Fock_init = None # the intial Fock
         self.__Cocc   = Cocc 
+        #print(("list_baseclass.__init__() -> Cocc: (%i,%i)\n" % self.__Cocc.shape))
         self.__Csup   = None # the Csup matrix
         self.__Dold   = None
         self.__kind   = list_opts[2]
@@ -565,29 +867,11 @@ class list_baseclass():
             self.__e_list = LIST_help.LISTd( int(list_opts[1]) )
         else:
             raise TypeError("Invalid Keyword")
-        #definition of scf_common = [
-        #nbf,nbf_tot,occ_num,Hcore,ovap,sup_basis,jk,ftype,frag_id]
-        
-        #unpack data for Fock evaluation
-        # the number of basis function can be defined from basis.nbf()
-        self.__nbf = scf_common['nbf']               
-        self.__nbf_tot = scf_common['nbf_tot']
-        self.__fragocc = scf_common['occ_num']
-        self.__Honel = scf_common['Hcore']
-        self.__ovap = scf_common['ovap']
-        self.__sup_bas = scf_common['sup_basis']
-        self.__mono_bas = scf_common['mono_basis']
-        self.__jk = scf_common['jk']
-        self.__jk_frag = scf_common['jk_mono']
-        self.__funcname = scf_common['ftype']
-        self.__frag_name = scf_common['frag_id']
 
-
-
-    def set_Csup(self,Cmat):
-        if not isinstance(Cmat,(np.ndarray)):
+    def set_Csup(self,Csup_gather): # the gathering has been done elsewhere
+        if not isinstance(Csup_gather,tuple):
                 raise TypeError("input must be a numpy.ndarray")
-        self.__Csup = Cmat
+        self.__Csup = Csup_gather
 
     def add_Fock(self,Fmat):
         if not isinstance(Fmat,(np.ndarray)):
@@ -603,7 +887,7 @@ class list_baseclass():
         if self.__kind == 'better':
             traspose = True
         counter = self.__e_list.list_count()
-        
+        #print("extrapolate: Cocc is (%i,%i) \n" % self.__Cocc.shape)
         D_actual = np.matmul(self.__Cocc,self.__Cocc.T)
         # store for later use
         self.__Dold = D_actual
@@ -623,12 +907,12 @@ class list_baseclass():
         Fp = Amat.dot(Fock).dot(Amat)
         e, C2 = np.linalg.eigh(Fp)
         C = Amat.dot(C2)
-        self.__Cocc = C[:, :ndocc]
+        self.__Cocc = C[:, :ndocc]  # update Mo occ
         return C, C[:, :ndocc],e
 
     
 
-    def finalize(self,Fock_in):
+    def finalize(self,frag_act,Fock_in):
         # Note : in SCF DIIS procedure, error vector should only be computed using <non-extrapolated> quantities
         # in LIST methods the input Fock is the extrapolated one
         #the output density; local variable
@@ -636,14 +920,18 @@ class list_baseclass():
         ### get Fock corresponding to the output
         # get  Fock_out
         
-        frag_id = self.__frag_name
-        Fock_out, dum = Fock_emb(self.__nbf,self.__nbf_tot,self.__fragocc,self.__Honel,\
-                                 self.__ovap,self.__Csup,self.__sup_bas,self.__jk,self.__funcname,frag_id)
+        Fock_out, proj_out = frag_act.get_Fock(self.__Csup)
+        #check dimension
+        if Fock_out.shape[0] != Fock_in.shape[0]:
+            raise ValueError("check fock (in|out) in LiST\n")
+
+
+
         # update Fock_init, to be used to estimate the diis_error in thie next iteration
         # the out Fock of iteration 'i' is the input Fock for iteraion 'i+1'
-        self.__Fock_init = Fock_out
+        self.__Fock_init = Fock_out+proj_out
 
-        Gmat,twoelene = twoel(self.__Cocc,self.__mono_bas,self.__jk_frag,self.__funcname)
+        Gmat,twoelene = frag_act.G()
         # out
         Hcore = Fock_out - Gmat
         SCF_E_out = 2.0*np.trace(np.matmul(Dout,Hcore)) + twoelene
@@ -657,7 +945,8 @@ class list_baseclass():
         else:
            Delta_F =(Fock_out-Fock_in)
 
-        
+        #debug 
+        print(self.__D_m.shape,Dout.shape,Delta_F.shape)
         cHKS_e = SCF_E_out + np.trace(np.matmul(self.__D_m-Dout,Delta_F))
         #
         if self.__kind == 'indirect':
@@ -691,7 +980,7 @@ class itime_base():
             self.__Vplus = np.linalg.inv(Vminus)  # still usefull
         except np.linalg.LinAlgError:
             print("Error in numpy.linalg.inv in itime_base")
-
+        print(Vminus.shape,Cocc.shape)
         self.__Cocc = np.matmul(self.__Vplus,Cocc) #initially served on the MO basis. MDS : Why is it needed?
         
     def add_F(self,Fmat): 
