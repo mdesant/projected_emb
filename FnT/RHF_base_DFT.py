@@ -18,6 +18,7 @@ class results:
     twoel_ene : float
     energy : float
     Enuc : float
+    functional : None
 
 def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
 
@@ -193,7 +194,8 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
     res_container.Da = frag_1.Da()
     res_container.twoel_ene = twoel_ene
     res_container.Enuc = frag_1.mol().nuclear_repulsion_energy()
-    
+    res_container.functional = frag_1.func_name()
+
     # quick test
     #_F = subA.Femb()
     #rtest = np.isrealobj(_F)
@@ -286,7 +288,7 @@ if __name__ == "__main__":
     import numpy as np
     import helper_HF
     #from util import Molecule
-    from init import initialize
+    from init import initialize, get_ene_wfn
     #from base_embedding import RHF_embedding_base
     #from embed_util import FntFactory
     
@@ -305,20 +307,31 @@ if __name__ == "__main__":
     Esup, scf_e_test, res_container= run(frags_container, args.e_conv, args.maxit, args.debug, args.loewdin,args.wf_frag)
 
     # do a genuine psi4 calculation on the super-system
-    ene_ref_sup =  psi4.energy(args.func,molecule=psi4mol)
+    func = res_container.functional
+    print("energy calculation of the super-molecule at:\n")
+    if not isinstance(func,str):
+       print("@@@ "+func["name"].upper()+" @@@")
+    else:
+       print("@@@ "+func.upper()+" @@@")
+    ene_ref_sup =  get_ene_wfn(func,molecule=psi4mol)
     ene_diff = abs(ene_ref_sup - (scf_e_test+Enuc))
 
     print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n")
-
+    print()
+    print("Final results of embedding calculation:\n")
+    print(" - DFT-in-DFT energy (eq 10 doi:10.1021/acs.jctc.7b00034)\n")
+    print(" - dE : E[super] - E[dft-in-dft]\n")
+    print(" - LOG10(|dE|)\n")
+    print()
     print('Energy/Eh = %4.16f  dE = % 1.5E LOG10(|dE|) = % 1.5f'
             % (scf_e_test+Enuc, ene_diff, np.log10(abs(ene_diff)) ))
 
-    # TODO: use a molecule with ghosted fragment if the supermolecule calculation is performed
+    # TODO: use a molecule with ghosted frozen fragment if the supermolecule (-basis) calculation is performed
     if args.supermol:
         ghost_frags = [x+1 for x in range(len(wfn_list))]
         ghost_frags.pop(args.wf_frag-1)
         psi4mol.set_ghost_fragments(ghost_frags)
-        ene_x,wfn_cc=psi4.energy(args.func, molecule=psi4mol, return_wfn=True)
+        ene_x,wfn_cc=get_ene_wfn(func, molecule=psi4mol, return_wfn=True)
     else:
         wfn_cc = wfn_list[args.wf_frag-1]
     import ccsd_native
@@ -349,12 +362,9 @@ if __name__ == "__main__":
         wfn_cc.Cb().copy(psi4.core.Matrix.from_array(res_container.Ca))
         wfn_cc.set_energy(res_container.energy) 
         
-        
-        if res_container.frag.func_name().upper() == 'HF':
-           ref_wfn_type = 'rhf'
-        else:
+        # RHF reference also if func != HF
+        ref_wfn_type = 'rhf'
 
-           ref_wfn_type = 'rhf'  # PROBLEM
         print("Reference wfn(CC) : %s\n" % ref_wfn_type)
 
         psi4.set_options({'cc_type': args.cc_type,

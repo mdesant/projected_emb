@@ -9,6 +9,17 @@ from util import Molecule
 # scf_type, df_guess, basis_spec, geom_file, func, e(d)_convergence : arguments psi4.set_options()
 # acc_param : determines the type of scf acceleration scheme
 
+def get_ene_wfn(func_name,molecule,return_wfn=False):
+    if not isinstance(func_name,str):
+         res = psi4.energy('scf',dtf_functional=func_name, \
+                            molecule=molecule, return_wfn=return_wfn)
+    else:
+         res = psi4.energy(func_name, molecule=molecule, return_wfn=return_wfn)
+    if return_wfn:
+        return res[0],res[1]
+    else:
+        return res
+
 def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_param, e_conv, d_conv, use_lv,\
                                        cc_type=None, cc_maxiter=100, debug = False, supermol=False,\
                                        df_basis_scf='def2-universal-jkfit', df_basis_cc='def2-universal-jkfit'):
@@ -129,11 +140,25 @@ def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_para
 
     frag_mol = [] # a container for the molecular fragment objets
     wfn_list =[] #container for wfn objects
+    
+    ### user-defined funtional ###
+    if func == 'svwn5': 
+       func_dict = {
+            "name": "SVWN5",
+             "x_functionals": {
+                "LDA_X": {}
+            },
+            "c_functionals": {
+                "LDA_C_VWN": {}
+            }
+       }
+       func = func_dict
 
+    ###
     totsys_mol.activate_all_fragments()
     for idx in range(1,num_frag+1):
       frag_mol.append(totsys_mol.extract_subsets(idx))
-      ene_idx,wfn_idx = psi4.energy(func, molecule=frag_mol[idx-1], return_wfn=True)
+      ene_idx,wfn_idx = get_ene_wfn(func, molecule=frag_mol[idx-1], return_wfn=True)
       wfn_list.append(wfn_idx)
     
     frags_container = None
