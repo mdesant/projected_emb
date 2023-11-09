@@ -145,8 +145,7 @@ class FntFactory():
         #  print('------------------------------------------')
         
         
-        
-        acc_scheme = self.__thaw.acc_scheme() 
+         
         # a local copy
         ffrozen_list = self.__frozn.copy() # necessary?
 
@@ -223,41 +222,84 @@ class FntFactory():
         #diis_e.subtract(psi4.core.triplet(Ovap, D_AA, F_emb, False, False, False))
         #diis_e = psi4.core.triplet(psi4.core.Matrix.from_array(Amat), diis_e, psi4.core.Matrix.from_array(Amat), False, False, False)
         
-        
         #dRMS = diis_e.rms()
+        
         #define
         eigvals = None
-
+        #print(self.__thaw.niter())
         dRMS = np.mean(diis_e**2)**0.5
-        if acc_scheme == 'diis':
-          #print("DIIS")
-          self.__thaw.diis().add(F_emb, psi4.core.Matrix.from_array(diis_e))
+        #pure DIIS
+        if '_diis' in self.__thaw.acc_scheme(): 
+          #pure diis
+          if self.__thaw.acc_scheme() == '_diis':
+              self.__thaw.diis()[1].add(F_emb, psi4.core.Matrix.from_array(diis_e))
+              # extrapolation step    
+              F_emb = psi4.core.Matrix.from_array(self.__thaw.diis()[1].extrapolate())
+          
+          else: 
+              # a_diis/e_diis
+              # codition on the iteration
 
-          # extrapolation step    
-          F_emb = psi4.core.Matrix.from_array(self.__thaw.diis().extrapolate())
+              try:
+                max_ediis = int(self.__thaw.acc_param()[2])
+              except ValueError:
+                if self.__debug:
+                    print("using default for max_ediis\n")
+                    max_ediis = 6
+
+              # in the intial scf iteration(max_ediis) we use A/E-DIIS
+              if self.__thaw.niter() <= max_ediis:
+                 #start filling the diis vector
+                 self.__thaw.diis()[1].add(F_emb, psi4.core.Matrix.from_array(diis_e))
+                 # populate A/E-diis quantities
+                 self.__thaw.diis()[0].add(np.asarray(F_emb), np.asarray(D_AA),SCF_E)
+                 F_emb = psi4.core.Matrix.from_array(self.__thaw.diis()[0].extrapolate())
+              else:
+                 #switch to DIIS
+                 self.__thaw.acc_scheme('_diis')
+
           self.__thaw.set_Femb( np.array(F_emb) )
           # Diagonalize Fock matrix
 
           #old -> replace
-          C_AA, Cocc_AA, Dens,eigvals = build_orbitals(F_emb,psi4.core.Matrix.from_array(Amat),ndoccA,nbf)
+          C_AA, Cocc_AA, dummy,eigvals = build_orbitals(F_emb,psi4.core.Matrix.from_array(Amat),ndoccA,nbf)
           #update the orbitals of the thawed fragment
           self.__thaw.set_Ca(np.array(C_AA))
 
         # imaginary time prop
-        elif acc_scheme == 'imag_time':
-              self.__thaw.imag_time()[0].add_F(F_emb)
-              #self.__thaw.imag_time()[1].add(F_emb,psi4.core.Matrix.from_array(diis_e))  # diis step
+        elif 'imag_time' in self.__thaw.acc_scheme():
+              try:
+                max_ediis = int(self.__thaw.acc_param()[2])
+              except ValueError:
+                if self.__debug:
+                    print("using default for max_ediis\n")
+                    max_ediis = 6
 
-              # extrapolation step    
-              #F_emb = psi4.core.Matrix.from_array(self.__thaw.imag_time()[1].extrapolate())
-              
-              self.__thaw.set_Femb( np.array(F_emb) )
-              self.__thaw.imag_time()[0].compute()
-              Cocc_AA = self.__thaw.imag_time()[0].Cocc()
-              self.__thaw.set_Ca(Cocc_AA,'OCC')
+              # in the intial scf iteration(max_ediis) we use A/E-DIIS
+              if self.__thaw.niter() <= max_ediis:
+                 self.__thaw.imag_time()[0].add_F(F_emb)
+                 self.__thaw.imag_time()[1].add(np.asarray(F_emb), np.asarray(D_AA),SCF_E)  # diis step
+
+                 # extrapolation step 
+                 #print(type(self.__thaw.imag_time()[1]))
+                 #print(type(self.__thaw.imag_time()[0]))
+                 F_emb = self.__thaw.imag_time()[1].extrapolate()
+                 if not isinstance(F_emb,np.ndarray):
+                     raise ValueError("F_emb must be np.ndarray\n")
+                 F_emb=psi4.core.Matrix.from_array(F_emb) #cast into psi4.core.Matrix
+                 C_AA, Cocc_AA, dummy,eigvals = build_orbitals(F_emb,psi4.core.Matrix.from_array(Amat),\
+                                                                    ndoccA,nbf)
+              else:   
+                 self.__thaw.acc_scheme('imag_time')
+                 self.__thaw.set_Femb( np.array(F_emb) )
+                 self.__thaw.imag_time()[0].compute()
+                 Cocc_AA = self.__thaw.imag_time()[0].Cocc()
 
 
-        elif acc_scheme == 'list':
+              self.__thaw.set_Ca(np.asarray(Cocc_AA),'OCC')
+
+
+        elif self.__thaw.acc_scheme() == 'list':
               self.__thaw.LiST().add_Fock(F_emb.np)
               # D_m not used
               F_emb,D_m = self.__thaw.LiST().extrapolate()
@@ -279,7 +321,7 @@ class FntFactory():
               # F_emb (extrapolated) is used as input for the next step (through the finalize step)
               self.__thaw.LiST().finalize(self.__thaw, F_emb)  
               self.__thaw.set_Femb( np.array(F_emb) )
-        elif acc_scheme == 'lv_shift':
+        elif self.__thaw.acc_scheme() == 'lv_shift':
                    #check the determinant of Ctrial matrix, in the case of supermolecular basis  the matrix may be ill-conditioned
                    Ctrial = self.__thaw.Ca_subset('ALL')
                    
@@ -316,11 +358,16 @@ class FntFactory():
                    C_inv = np.linalg.inv(Ctrial)  # invert Ctrial
                    F_emb = np.matmul(C_inv.T, np.matmul(Fp,C_inv) )   # Express the Fock in the trial MO basis
                    self.__thaw.set_Femb( np.array(F_emb) )
-
+        else:
+                   raise Exception("wrong keyword for scf acceleration\n")
 
         
         self.__thaw.set_eps(eigvals)
+        self.__thaw.finalize()
         return SCF_E, ene,dRMS
+
+    def actual_boost(self):
+        return self.__thaw.acc_scheme()
 
     def finalize(self): 
         if not isinstance(self.__fnt_mag,list):

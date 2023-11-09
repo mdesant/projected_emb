@@ -61,7 +61,7 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
     t = time.time()
      
     Eold_sup = 0.0 
-    
+    D_conv = e_conv 
     print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     print("@ Energy label refers to the the fragment being thawed                                                     @")
     print("@ dRMS refers to the root mean square of the DIIS error of the fragment being thawed                       @")
@@ -71,14 +71,14 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
             E_step, E_sup, dRMS = jobrun.thaw_active() 
             
             print('FnT Iteration %3d: Frag = %s Energy = %4.12f  dE(sup) = % 1.5E  dRMS = % 1.5E %s'
-                      % (FnT_ITER,jobrun.thawed_id(), E_step.real, (E_sup-Eold_sup), dRMS, acc_type ))
+                      % (FnT_ITER,jobrun.thawed_id(), E_step.real, (E_sup-Eold_sup), dRMS, jobrun.actual_boost() ))
             
             if debug:
                debug_out.write('FnT Iteration %3d: Frag = %s Energy(Im) = %.16e\n' % (FnT_ITER,jobrun.thawed_id(),E_step.imag) )
             
             jobrun.finalize()  # the role active-frozen is assigned here
             
-            if abs(E_sup-Eold_sup) < E_conv:
+            if abs(E_sup-Eold_sup) < E_conv and dRMS < D_conv:
               break
             Eold_sup = E_sup
 

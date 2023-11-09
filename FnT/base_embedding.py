@@ -23,7 +23,8 @@ import psi4
 #deprecated
 #from pkg_resources import parse_version
 from packaging import version
-import helper_HF
+from helper_HF import DIIS_helper
+from ediis_helper import EDIIS_helper
 import LIST_help
 import scipy
 from scipy.linalg import fractional_matrix_power
@@ -147,7 +148,8 @@ class RHF_embedding_base():
       #for lv_shift projector
       self.__muval = None
       self.__do_lv = flag_lv
-
+      
+      self.__scf_iter = 1
 ###########################################
   def mol(self):
       return self.__frag_mol
@@ -157,6 +159,8 @@ class RHF_embedding_base():
       self.__e_scf = ene
   def e_scf(self):
       return self.__e_scf
+  def  niter(self):
+      return self.__scf_iter
 ###########################################
   def initialize(self,ovap_sup,basis_sup,basis_mono,\
                      Hsup,Ccoeff,acc_opts,target='direct',debug=False,muval=1.0e6):
@@ -283,17 +287,28 @@ class RHF_embedding_base():
       else:
           Cocc_in = self.__Cocc 
       
-      if self.__accel == 'diis':
-          self.__scfboost = helper_HF.DIIS_helper(max_vec) 
+      # set acceleration engines
+      if '_diis' in self.__accel:
+          #pure diis
+          diis_engine = DIIS_helper(max_vec=6)
+          self.__scfboost = diis_engine
+          self.__scfboost = (None,diis_engine)
+          if self.__accel == 'a_diis' or self.__accel == 'e_diis':
+             self.__scfboost = (EDIIS_helper(max_vec=6,engine=self.__accel),diis_engine)
+
       elif self.__accel == 'list':
-          raise Exception("UNSAFE, to fixed \n")
+          #raise Exception("UNSAFE, to fixed \n")
+          print("using list acceleration, untrusted\n")
       # list_baseclass ->    __init__(self,Cocc,scf_common,active_frag,list_opts,debug)
           self.__scfboost = list_baseclass(Cocc_in, scf_common, acc_opts, debug)
-      elif self.__accel == 'imag_time':
-          diis_engine = helper_HF.DIIS_helper(max_vec=4)   
-          self.__scfboost = (itime_base(Vminus,Cocc_in,acc_opts,debug),diis_engine)   # D^{AO} = Vminus D^{orth} Vminus.T
+
+      elif 'imag_time' in self.__accel :
+          ediis_engine = EDIIS_helper(max_vec=4,engine='a_diis')   
+          self.__scfboost = (itime_base(Vminus,Cocc_in,acc_opts,debug),ediis_engine)   # D^{AO} = Vminus D^{orth} Vminus.T
+
       elif self.__accel == 'lv_shift':
           self.__scfboost = None
+
       else:
           raise ValueError("wrong keyword/not implemented\n")
 
@@ -363,13 +378,18 @@ class RHF_embedding_base():
   #    self.__frag_id = frag_iden # a int type
 
   def diis(self):
-      acc_type  = self.__accel
-      if acc_type != 'diis':
-         raise Exception("Not supposed to use diis")
+      diis_on = False
+      if '_diis'  in self.__accel:
+          diis_on = True
+      if not diis_on:
+         raise Exception("wrong keyword, not supposed to use diis")
+      if not isinstance(self.__scfboost,tuple):
+         raise ValueError("check diis __scfboost\n")
       return self.__scfboost
+
   def imag_time(self):
       acc_type  = self.__accel
-      if acc_type != 'imag_time':
+      if not 'imag_time' in acc_type:
          raise Exception("Not supposed to use imaginary time propagation")
       return self.__scfboost
   # LiST : TO BE REMOVED or IMPROVED
@@ -382,7 +402,9 @@ class RHF_embedding_base():
   def acc_param(self):
       return self.__acc_opts
 
-  def acc_scheme(self):
+  def acc_scheme(self,force_type=None):
+      if force_type is not None:
+          self.__accel = force_type
       res=self.__accel
       return res
 
@@ -624,7 +646,9 @@ class RHF_embedding_base():
             ovap = self.full_ovapm()
         else:
             ovap = self.S()
-        Fock = self.Femb()    
+        Fock = np.asarray(self.Femb())  
+        if  not isinstance(Fock,np.ndarray):
+            raise ValueError("Fock must be numpy.ndarray\n")
 
         try :
            eigval,C = scipy.linalg.eigh(Fock, ovap)   
@@ -635,9 +659,12 @@ class RHF_embedding_base():
         self.__eps = eigval
         self.set_Ca(C,'ALL')
         self.set_Ca(C,'OCC')
-      ##             
+      ## clean ?             
       #self.__Ccoeff = None
       #self.__Cocc = None
+
+      #increment scf_iter counter
+      self.__scf_iter += 1
   def func_name(self):
       return self.__funcname
 ############################################################################
