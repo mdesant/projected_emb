@@ -249,8 +249,8 @@ class FntFactory():
 
               # in the intial scf iteration(max_ediis) we use A/E-DIIS
               if self.__thaw.niter() <= max_ediis:
-                 #start filling the diis vector
-                 self.__thaw.diis()[1].add(F_emb, psi4.core.Matrix.from_array(diis_e))
+                 #start filling the diis vector? <- NO 
+                 #self.__thaw.diis()[1].add(F_emb, psi4.core.Matrix.from_array(diis_e))
                  # populate A/E-diis quantities
                  self.__thaw.diis()[0].add(np.asarray(F_emb), np.asarray(D_AA),SCF_E)
                  F_emb = psi4.core.Matrix.from_array(self.__thaw.diis()[0].extrapolate())

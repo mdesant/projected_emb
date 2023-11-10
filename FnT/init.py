@@ -208,11 +208,18 @@ def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_para
         
     if num_frag != len(frag_container):
         raise Exception("check fragment number\n")
+    
+    # if core_gues
+    """
+        Cocc_container = frag_container[0].Cocc_gather(frag_container[1:])
+    
+        for elm in frag_container:
+           elm.core_guess(Cocc_container)
+    """
 
     frag_act = frag_container[0]
     fnt_list = [frag_act,frag_container[1:].copy()] 
-
-
+   
     return fnt_list,totsys_mol,wfn_list
 ############################################################################
 

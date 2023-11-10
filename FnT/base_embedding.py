@@ -373,6 +373,35 @@ class RHF_embedding_base():
     self.__limit = (l1,l2)
 #####################################################################
 
+  def core_guess(self,Cocc):
+       # Cocc must be a tuple
+       Csup = Cocc[1]
+       
+       num_item = len(Cocc[0])
+       Cocc = Cocc[0].copy()
+       
+       frag_id = self.__frag_id
+       #reorder
+       Cocc_in = Cocc.pop(frag_id - 1)
+       Cocc.insert(Cocc_in)
+
+       # get the fock from Csup
+       Fock = self.get_Fock((Cocc_set,Csup))
+
+       # subtract the G[D] part to obtain h[A_in_env]_core
+       G,dum = self.G()
+       hcore = Fock - G 
+       
+       #diagonalize hcore
+       # Amat = ovap^-.5
+
+       Amat = self.Amat()
+       Fp = np.matmul(Amat.T,np.matmul(hcore,Amat))
+       
+       e, C2 = np.linalg.eigh(Fp)
+       C = Amat.dot(C2)
+       self.set_Ca(C)
+        
   #def set_tag(self,frag_iden):
   #    if not isinstance(frag_iden,int)
   #    self.__frag_id = frag_iden # a int type
