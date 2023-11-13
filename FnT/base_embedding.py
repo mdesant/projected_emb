@@ -374,23 +374,35 @@ class RHF_embedding_base():
 #####################################################################
 
   def core_guess(self,Cocc):
+
        # Cocc must be a tuple
+       if not isinstance(Cocc,tuple):
+           raise TypeError("Csup must be tuple\n")
        Csup = Cocc[1]
+       #trace= np.matmul(self.__S,np.matmul(Csup,Csup.T))
+       #print(np.trace(trace))
        
-       num_item = len(Cocc[0])
-       Cocc = Cocc[0].copy()
-       
+       Cocc = Cocc[0].copy() # make a copy so that the reordering will not affect other fragments
+       check_ndocc = 0
+       for mtx in Cocc:
+           check_ndocc += mtx.shape[1]
+       if check_ndocc != self.__ndocc_super:
+           raise ValueError("wrong n. doubly occupied MO\n")
+
        frag_id = self.__frag_id
        #reorder
        Cocc_in = Cocc.pop(frag_id - 1)
-       Cocc.insert(Cocc_in)
+       if self.__ndocc != Cocc_in.shape[1]:
+           raise ValueError("wrong n. doubly occupied MO of the frag: %s\n" % frag_id)
+       Cocc.insert(0,Cocc_in)
 
-       # get the fock from Csup
-       Fock = self.get_Fock((Cocc_set,Csup))
+       # get the fock from Csup, return Fock,proj
+       Fock = self.get_Fock((Cocc,Csup))
 
        # subtract the G[D] part to obtain h[A_in_env]_core
        G,dum = self.G()
-       hcore = Fock - G 
+       # hcore is Fock[sup] + proj - two_el_mtx[frag]
+       hcore = Fock[0] +Fock[1] - G 
        
        #diagonalize hcore
        # Amat = ovap^-.5
@@ -399,6 +411,9 @@ class RHF_embedding_base():
        Fp = np.matmul(Amat.T,np.matmul(hcore,Amat))
        
        e, C2 = np.linalg.eigh(Fp)
+       print('Orbital Energies (occ) [Eh] for frag. %i guess\n' % self.whoIam() )
+       for k in range(self.__ndocc):
+            print(e[k])
        C = Amat.dot(C2)
        self.set_Ca(C)
         
@@ -588,8 +603,8 @@ class RHF_embedding_base():
               tmp_mtx[self.__fake_limit[0]:self.__fake_limit[1]+1, :] = tmp.real    # this occurs in the first FnT 
                                                                                     # iteration of a supermolecule-basis setting (-s)
           else:
-              if self.__debug:
-                  print("Csup_format needed here\n")
+              #if self.__debug:
+                  #print("Csup_format needed here\n")
               tmp_mtx[l1:l2+1, :] = tmp.real
 
           if self.__debug:
@@ -629,7 +644,7 @@ class RHF_embedding_base():
 
   def set_eps(self,epsA):
 
-      self.__eps=epsA
+      self.__eps=np.asarray(epsA)
 
   #def molecule(self):
   #    return self.__tagname
@@ -675,13 +690,15 @@ class RHF_embedding_base():
             ovap = self.full_ovapm()
         else:
             ovap = self.S()
-        Fock = np.asarray(self.Femb())  
-        if  not isinstance(Fock,np.ndarray):
+        if  not isinstance(self.Femb(),np.ndarray):
             raise ValueError("Fock must be numpy.ndarray\n")
+        Fock = np.asarray(self.Femb()) 
 
+
+        #if not isinstance(self.__eps,np.ndarray):
         try :
            eigval,C = scipy.linalg.eigh(Fock, ovap)   
-
+        
         except scipy.linalg.LinAlgError:
            print("finalize(); Error in linal.eigh")
         
@@ -1031,18 +1048,23 @@ class itime_base():
         self.__lstep = -1.0j*np.float_(acc_opts[1]) # the only required parameter
         self.__Vminus = Vminus # the ndim x ndim  transformation matrix: AO-> prop basis -> TODO: use Vminus=S^-0.5
         self.__Vplus = None # the inverse matrix of Vminus
-
+        if not isinstance(Vminus,np.ndarray):
+            raise ValueError("Vminus must be numpy.ndarray\n")
         try:
             self.__Vplus = np.linalg.inv(Vminus)  # still usefull
         except np.linalg.LinAlgError:
             print("Error in numpy.linalg.inv in itime_base")
-        print(Vminus.shape,Cocc.shape)
         self.__Cocc = np.matmul(self.__Vplus,Cocc) #initially served on the MO basis. MDS : Why is it needed?
         
     def add_F(self,Fmat): 
         self.__Fock=Fmat
     def compute(self):
         fock_ti = self.__Fock
+        if not isinstance(fock_ti,np.ndarray):
+            raise ValueError("Fock(t) must be numpy.ndarray\n")
+        if not isinstance(self.__Vminus,np.ndarray):
+            raise ValueError("Vminus must be numpy.ndarray\n")
+        #print("V matrix [%i,%i]\n" % self.__Vminus.shape)
         C_new,C_midf = it_util.prop_mmut(fock_ti,self.__Cocc,self.__C_midb,self.__lstep,self.__Vminus,fout=sys.stderr)
 
         #update 

@@ -228,6 +228,9 @@ if __name__ == "__main__":
     parser.add_argument("-o1","--obs1", help="Specify the orbital basis set for subsys A", required=False, 
             type=str, default="6-31G*")
 
+    parser.add_argument("--core", help="Use modified-core guess orbital", required=False,
+            default=False, action="store_true")
+
     # density fitting
     parser.add_argument("--df_basis", help="Specify the aux basis set for SCF", required=False, 
             type=str, default="cc-pvdz-jkfit")
@@ -299,7 +302,7 @@ if __name__ == "__main__":
     frags_container, psi4mol, wfn_list = initialize(args.scf_type, args.df_guess, args.obs1, args.puream,\
                                                         args.geom, args.func, args.scf_opts, args.e_conv,\
                                                         args.d_conv, args.lv, args.cc_type,args.cc_maxit, args.debug,\
-                                                        args.supermol,args.df_basis,args.df_basis_cc)
+                                                        args.supermol, args.core, args.df_basis,args.df_basis_cc)
     
     #exit() 
     Enuc = psi4mol.nuclear_repulsion_energy()

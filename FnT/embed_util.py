@@ -245,7 +245,7 @@ class FntFactory():
               except ValueError:
                 if self.__debug:
                     print("using default for max_ediis\n")
-                    max_ediis = 6
+                max_ediis = 4
 
               # in the intial scf iteration(max_ediis) we use A/E-DIIS
               if self.__thaw.niter() <= max_ediis:
@@ -267,17 +267,17 @@ class FntFactory():
           self.__thaw.set_Ca(np.array(C_AA))
 
         # imaginary time prop
-        elif 'imag_time' in self.__thaw.acc_scheme():
+        elif 'imag_time' in self.__thaw.acc_scheme() :
               try:
                 max_ediis = int(self.__thaw.acc_param()[2])
               except ValueError:
                 if self.__debug:
                     print("using default for max_ediis\n")
-                    max_ediis = 6
+                max_ediis = 0
 
               # in the intial scf iteration(max_ediis) we use A/E-DIIS
               if self.__thaw.niter() <= max_ediis:
-                 self.__thaw.imag_time()[0].add_F(F_emb)
+                 self.__thaw.imag_time()[0].add_F(np.asarray(F_emb))
                  self.__thaw.imag_time()[1].add(np.asarray(F_emb), np.asarray(D_AA),SCF_E)  # diis step
 
                  # extrapolation step 
@@ -289,9 +289,14 @@ class FntFactory():
                  F_emb=psi4.core.Matrix.from_array(F_emb) #cast into psi4.core.Matrix
                  C_AA, Cocc_AA, dummy,eigvals = build_orbitals(F_emb,psi4.core.Matrix.from_array(Amat),\
                                                                     ndoccA,nbf)
-              else:   
-                 self.__thaw.acc_scheme('imag_time')
                  self.__thaw.set_Femb( np.array(F_emb) )
+              else:
+                 self.__thaw.acc_scheme('imag_time')
+                 
+                 self.__thaw.imag_time()[0].add_F(np.asarray(F_emb))
+                 # store for later
+                 self.__thaw.set_Femb( np.array(F_emb) )
+                 
                  self.__thaw.imag_time()[0].compute()
                  Cocc_AA = self.__thaw.imag_time()[0].Cocc()
 
@@ -321,6 +326,7 @@ class FntFactory():
               # F_emb (extrapolated) is used as input for the next step (through the finalize step)
               self.__thaw.LiST().finalize(self.__thaw, F_emb)  
               self.__thaw.set_Femb( np.array(F_emb) )
+
         elif self.__thaw.acc_scheme() == 'lv_shift':
                    #check the determinant of Ctrial matrix, in the case of supermolecular basis  the matrix may be ill-conditioned
                    Ctrial = self.__thaw.Ca_subset('ALL')

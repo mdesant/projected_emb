@@ -21,7 +21,7 @@ def get_ene_wfn(func_name,molecule,return_wfn=False):
         return res
 
 def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_param, e_conv, d_conv, use_lv,\
-                                       cc_type=None, cc_maxiter=100, debug = False, supermol=False,\
+                                       cc_type=None, cc_maxiter=100, debug = False, supermol=False, core_guess=False,\
                                        df_basis_scf='def2-universal-jkfit', df_basis_cc='def2-universal-jkfit'):
     
     # check compatibility scf_type && cc_type
@@ -209,13 +209,12 @@ def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_para
     if num_frag != len(frag_container):
         raise Exception("check fragment number\n")
     
-    # if core_gues
-    """
+    if core_guess:
+    
         Cocc_container = frag_container[0].Cocc_gather(frag_container[1:])
     
         for elm in frag_container:
            elm.core_guess(Cocc_container)
-    """
 
     frag_act = frag_container[0]
     fnt_list = [frag_act,frag_container[1:].copy()] 
