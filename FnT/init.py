@@ -11,7 +11,7 @@ from util import Molecule
 
 def get_ene_wfn(func_name,molecule,return_wfn=False):
     if not isinstance(func_name,str):
-         res = psi4.energy('scf',dtf_functional=func_name, \
+         res = psi4.energy('scf',dft_functional=func_name, \
                             molecule=molecule, return_wfn=return_wfn)
     else:
          res = psi4.energy(func_name, molecule=molecule, return_wfn=return_wfn)
@@ -23,7 +23,8 @@ def get_ene_wfn(func_name,molecule,return_wfn=False):
 def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_param, e_conv, d_conv, use_lv,\
                                        cc_type=None, cc_maxiter=100, debug = False, supermol=False, core_guess=False,\
                                        df_basis_scf='def2-universal-jkfit', df_basis_cc='def2-universal-jkfit'):
-    
+    if use_lv:
+        print("Using P = mu*[SDS]\n")
     # check compatibility scf_type && cc_type
     # cc_type = 'conv' requires scf_type = 'direct'
     # cc_type = 'cd/df' requires scf_type = 'cd/[mem_df;disk_df;df]) accordingly
@@ -146,10 +147,10 @@ def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_para
        func_dict = {
             "name": "SVWN5",
              "x_functionals": {
-                "LDA_X": {}
+                "LDA_X": {1.}
             },
             "c_functionals": {
-                "LDA_C_VWN": {}
+                "LDA_C_VWN": {1.}
             }
        }
        func = func_dict
@@ -196,7 +197,7 @@ def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_para
                                    num+1, supermol=supermol,flag_lv=use_lv)
         #-> initialize(..)
         tmp.initialize(ovapm,basis_mol,wfn.basisset(), H, np.array(wfn.Ca()),\
-                   acc_opts,target=scf_type,debug=debug,muval=1.0e4)
+                   acc_opts,target=scf_type,debug=debug,muval=1.0e3)
         # TEST
         #jk_frag = get_JK(scf_type,tmp.mol(),wfn.basisset())
         #tmp.set_jk(jk_frag)

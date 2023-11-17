@@ -20,7 +20,7 @@ class results:
     Enuc : float
     functional : None
 
-def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
+def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1,orb_list=[1,2,3]):
 
     #DFT_in_DFT block
     # Set tolerances
@@ -70,7 +70,7 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
 
             E_step, E_sup, dRMS = jobrun.thaw_active() 
             
-            print('FnT Iteration %3d: Frag = %s Energy = %4.12f  dE(sup) = % 1.5E  dRMS = % 1.5E %s'
+            print('FnT Iteration %3d: Frag = %s Energy = %.8e  dE(sup) = % 1.5E  dRMS = % 1.5E %s'
                       % (FnT_ITER,jobrun.thawed_id(), E_step.real, (E_sup-Eold_sup), dRMS, jobrun.actual_boost() ))
             
             if debug:
@@ -177,8 +177,11 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1):
 
     #psi4.core.clean()
     #refresh the molecule object
+    if isinstance(orb_list,str):
+        tmp = orb_list.split(',')
+        orb_list = [int(x) for x in tmp]
     psi4.set_options({'cubeprop_tasks': ['density','orbitals'],
-                      'cubeprop_orbitals': [1,2,3], # just some  orbitals
+                      'cubeprop_orbitals': orb_list, # just some  orbitals
                       'CUBIC_GRID_OVERAGE' : [4.5,4.5,4.5],
                       'CUBEPROP_ISOCONTOUR_THRESHOLD' : 1.0,
                       'CUBIC_GRID_SPACING' : [0.2,0.2,0.2]})
@@ -258,8 +261,8 @@ if __name__ == "__main__":
             default=1.0e-7, type = float)
     parser.add_argument("--d_conv", help="Convergence density threshold",
             default=1.0e-6, type = float)
-    parser.add_argument("--scf_opts", help="Select SCF acceleration options : accel_scheme;maxvec;type (default : diis;6; None )", required=False,
-            default="diis;6; None", type=str)
+    parser.add_argument("--scf_opts", help="Select SCF acceleration options : accel_scheme;maxvec;type (default : _diis;6; None )", required=False,
+            default="_diis;6; None", type=str)
     # accel_scheme : diis|list, max_vec = N, type : direct|indirect|better|None
     
     parser.add_argument("--loewdin", help="Activate Intermediate Loewdin orthogonalization (on Cocc[sup]->Fock) ", required=False,
@@ -276,6 +279,10 @@ if __name__ == "__main__":
     parser.add_argument("--lv", help="Use level-shift operator instead of Huzinaga", required=False,
             default=False, action="store_true")
 
+    parser.add_argument("--cube_print", help="Dump the cube of the density and selected orbital of the wf_fragment", required=False,
+            default=False, action="store_true")
+    parser.add_argument("--orbitals", help="List of orbital of teh active (wfn) fragment", required=False,
+            default="1,2,3", type = str)
     
     args = parser.parse_args()
     # ene_vanilla is the energy of the genuine supermolecular calculation
@@ -307,7 +314,7 @@ if __name__ == "__main__":
     #exit() 
     Enuc = psi4mol.nuclear_repulsion_energy()
     # main function ,update isoA
-    Esup, scf_e_test, res_container= run(frags_container, args.e_conv, args.maxit, args.debug, args.loewdin,args.wf_frag)
+    Esup, scf_e_test, res_container= run(frags_container, args.e_conv, args.maxit, args.debug, args.loewdin,args.wf_frag,args.orbitals)
 
     # do a genuine psi4 calculation on the super-system
     func = res_container.functional
@@ -337,6 +344,20 @@ if __name__ == "__main__":
         ene_x,wfn_cc=get_ene_wfn(func, molecule=psi4mol, return_wfn=True)
     else:
         wfn_cc = wfn_list[args.wf_frag-1]
+        
+    #copy into wfn_cc
+    wfn_cc.Da().copy(psi4.core.Matrix.from_array(res_container.Da))
+    wfn_cc.Fa().copy(psi4.core.Matrix.from_array(res_container.Fa))
+    wfn_cc.H().copy(psi4.core.Matrix.from_array(res_container.Hcore))
+    wfn_cc.Ca().copy(psi4.core.Matrix.from_array(res_container.Ca))
+    wfn_cc.Db().copy(psi4.core.Matrix.from_array(res_container.Da))
+    wfn_cc.Fb().copy(psi4.core.Matrix.from_array(res_container.Fa))
+    wfn_cc.Cb().copy(psi4.core.Matrix.from_array(res_container.Ca))
+    wfn_cc.set_energy(res_container.energy)
+    
+    if args.cube_print:
+       psi4.cubeprop(wfn_cc)
+    
     import ccsd_native
     import ccsd_conv
 
@@ -354,17 +375,7 @@ if __name__ == "__main__":
         # if Hcore_modified (A_in_B) is not copied in the H() variable of wfn_cc
         # despite not affecting the correlation energy, since we copy-in the "effective"
         # Fock (Hcore_A_in_B +2J-K) and Da, Ca coefficients.
-        
-        #copy into wfn_cc
-        wfn_cc.Da().copy(psi4.core.Matrix.from_array(res_container.Da))
-        wfn_cc.Fa().copy(psi4.core.Matrix.from_array(res_container.Fa))
-        wfn_cc.H().copy(psi4.core.Matrix.from_array(res_container.Hcore))
-        wfn_cc.Ca().copy(psi4.core.Matrix.from_array(res_container.Ca))
-        wfn_cc.Db().copy(psi4.core.Matrix.from_array(res_container.Da))
-        wfn_cc.Fb().copy(psi4.core.Matrix.from_array(res_container.Fa))
-        wfn_cc.Cb().copy(psi4.core.Matrix.from_array(res_container.Ca))
-        wfn_cc.set_energy(res_container.energy) 
-        
+         
         # RHF reference also if func != HF
         ref_wfn_type = 'rhf'
 
