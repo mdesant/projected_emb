@@ -66,28 +66,16 @@ def get_JK(target,psi_mol,basis_object):
           print("DEBUG->target: %s\n" % target)
           auxb = psi4.core.BasisSet.build(psi_mol, "DF_BASIS_SCF", "",\
                                           fitrole="RIFIT",other=basis_object.name())
+          #import pdb; pdb.set_trace();
           jk_factory = psi4.core.JK.build(basis_object,auxb)
       else:
           #print("DEBUG->target: %s\n" % target)
-          try:
-            jk_factory = psi4.core.JK.build(basis_object)
-          except ValueError:
-            print("Error in psi4.core.JK.build\n")
+          jk_factory = psi4.core.JK.build(basis_object)
  
-      try:
-         jk_factory.set_do_wK(False)
-      except ValueError:
-         print("Error in psi4.core.JK.set_do_wK\n")
+      jk_factory.set_do_wK(False)
 
-      try:
-         jk_factory.print_header()
-      except ValueError:
-         print("Error in psi4.core.JK.print_header\n")
-      
-      try:
-         jk_factory.initialize()
-      except ValueError:
-         print("Error in psi4.core.JK.initialize(self)\n")
+      jk_factory.initialize()
+      jk_factory.print_header()
       return jk_factory 
 ##################################################################
 # acc_opts = [kind, maxvec, variant=None]
