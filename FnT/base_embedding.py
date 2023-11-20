@@ -68,12 +68,14 @@ def get_JK(target,psi_mol,basis_object):
                                           fitrole="RIFIT",other=basis_object.name())
           #import pdb; pdb.set_trace();
           jk_factory = psi4.core.JK.build(basis_object,auxb)
+          mem_val = jk_factory.memory_estimate()
       else:
           #print("DEBUG->target: %s\n" % target)
           jk_factory = psi4.core.JK.build(basis_object)
+          mem_val = jk_factory.memory_estimate()
  
       jk_factory.set_do_wK(False)
-
+      jk_factory.set_memory(mem_val)
       jk_factory.initialize()
       jk_factory.print_header()
       return jk_factory 

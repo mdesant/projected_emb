@@ -52,7 +52,7 @@ def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_para
 
     moltot = Molecule(fgeom,label=False)
 
-    psi4.set_memory('2 GB')
+    psi4.set_memory('4 GB')
 
 
 
