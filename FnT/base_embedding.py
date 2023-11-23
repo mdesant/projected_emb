@@ -141,8 +141,11 @@ class RHF_embedding_base():
       
       self.__scf_iter = 1
 ###########################################
-  def mol(self):
-      return self.__frag_mol
+  def mol(self,supmol=False):
+      if supmol:
+          return self.__sup_mol
+      else:
+          return self.__frag_mol
   def set_jk(self,jk_factory):
       self.__jk_mono = jk_factory
   def set_e_scf(self,ene):

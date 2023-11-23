@@ -9,16 +9,22 @@ from util import Molecule
 # scf_type, df_guess, basis_spec, geom_file, func, e(d)_convergence : arguments psi4.set_options()
 # acc_param : determines the type of scf acceleration scheme
 
-def get_ene_wfn(func_name,molecule,return_wfn=False):
+def get_ene_wfn(func_name,molecule,return_wfn=False,print_cube=False):
     if not isinstance(func_name,str):
-         res = psi4.energy('scf',dft_functional=func_name, \
+         result = psi4.energy('scf',dft_functional=func_name, \
                             molecule=molecule, return_wfn=return_wfn)
     else:
-         res = psi4.energy(func_name, molecule=molecule, return_wfn=return_wfn)
+         result = psi4.energy(func_name, molecule=molecule, return_wfn=return_wfn)
+    if print_cube:
+        # check result contain the wfn
+        if len(result) <2:
+            raise Exception("return_wfn should be set True\n")
+        psi4.cubeprop(result[1])
+    
     if return_wfn:
-        return res[0],res[1]
+        return result[0],result[1]
     else:
-        return res
+        return result
 
 def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_param, e_conv, d_conv, use_lv,\
                                        cc_type=None, cc_maxiter=100, debug = False, supermol=False, core_guess=False,\
@@ -88,11 +94,7 @@ def initialize(scf_type, df_guess, basis_spec, puream, geom_file, func, acc_para
                       'dft_radial_scheme' : 'becke',
                        #'dft_radial_points': 80,
                       'dft_spherical_points' : 434,
-                      #'cubeprop_tasks': ['orbitals'],
-                      #'cubeprop_orbitals': [1, 2, 3, 4,5,6,7,8,9,10],
-                      'CUBIC_GRID_OVERAGE' : L,
-                      'CUBEPROP_ISOCONTOUR_THRESHOLD' : 1.0,
-                      'CUBIC_GRID_SPACING' : Dx,
+                      'cubeprop_tasks': ['density'],
                       'e_convergence': 1.0e-8,
                       'd_convergence': 1.0e-8})
 

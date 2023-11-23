@@ -9,6 +9,14 @@ import copy
 import numpy as np 
 from base_embedding import RHF_embedding_base
 
+def isinteger(x):
+    isint = True
+    try :
+      int(x)
+    except ValueError:
+      isint = False
+    return isint
+
 class results:
     frag : RHF_embedding_base
     Da : np.ndarray = None 
@@ -177,11 +185,27 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1,orb_list=[
 
     #psi4.core.clean()
     #refresh the molecule object
+    cube_mol = frag_1.mol(supmol=True)
     if isinstance(orb_list,str):
         tmp = orb_list.split(',')
-        orb_list = [int(x) for x in tmp]
-    psi4.set_options({'cubeprop_tasks': ['density','orbitals'],
-                      'cubeprop_orbitals': orb_list, # just some  orbitals
+        test = isinteger(tmp[0])
+        if test:
+           orb_list = [int(x) for x in tmp]
+
+           #print some cube 
+           from cube_util import orbtocube
+           orbtocube(cube_mol,[4.5,4.5,4.5],[0.2,0.2,0.2],frag_1.Ca_subset('ALL'),\
+                                    orb_list,jk.basisset(),tag="PsiA_e")
+    #dump the embedded (single fragment) and the reconstructed density on cube
+    Dsup_rebuilt = np.matmul(res_gather[1],res_gather[1].T)
+    from cube_util import denstocube
+    denstocube(cube_mol,jk.basisset(),frag_1.Da(),"Da_e",\
+                                         [4.5,4.5,4.5],[0.2,0.2,0.2])
+    
+    sup_basis = frag_1.get_jk('super').basisset()
+    denstocube(cube_mol,sup_basis,Dsup_rebuilt,"Da_sup",\
+                                         [4.5,4.5,4.5],[0.2,0.2,0.2])
+    psi4.set_options({'cubeprop_tasks': ['density'],
                       'CUBIC_GRID_OVERAGE' : [4.5,4.5,4.5],
                       'CUBEPROP_ISOCONTOUR_THRESHOLD' : 1.0,
                       'CUBIC_GRID_SPACING' : [0.2,0.2,0.2]})
@@ -282,7 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("--cube_print", help="Dump the cube of the density and selected orbital of the wf_fragment", required=False,
             default=False, action="store_true")
     parser.add_argument("--orbitals", help="List of orbital of teh active (wfn) fragment", required=False,
-            default="1,2,3", type = str)
+            default="", type = str)
     
     args = parser.parse_args()
     # ene_vanilla is the energy of the genuine supermolecular calculation
@@ -323,7 +347,7 @@ if __name__ == "__main__":
        print("@@@ "+func["name"].upper()+" @@@")
     else:
        print("@@@ "+func.upper()+" @@@")
-    ene_ref_sup =  get_ene_wfn(func,molecule=psi4mol)
+    ene_ref_sup, dum =  get_ene_wfn(func,molecule=psi4mol,return_wfn=True,print_cube=args.cube_print)
     ene_diff = abs(ene_ref_sup - (scf_e_test+Enuc))
 
     print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n")
@@ -354,9 +378,6 @@ if __name__ == "__main__":
     wfn_cc.Fb().copy(psi4.core.Matrix.from_array(res_container.Fa))
     wfn_cc.Cb().copy(psi4.core.Matrix.from_array(res_container.Ca))
     wfn_cc.set_energy(res_container.energy)
-    
-    if args.cube_print:
-       psi4.cubeprop(wfn_cc)
     
     import ccsd_native
     import ccsd_conv
