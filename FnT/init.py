@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 import re
+import time
 import numpy as np
 sys.path.insert(0, "../common")
 from util import Molecule
@@ -10,11 +11,18 @@ from util import Molecule
 # acc_param : determines the type of scf acceleration scheme
 
 def get_ene_wfn(func_name,molecule,return_wfn=False,print_cube=False):
+
+    t = time.process_time()
+    
     if not isinstance(func_name,str):
          result = psi4.energy('scf',dft_functional=func_name, \
                             molecule=molecule, return_wfn=return_wfn)
     else:
          result = psi4.energy(func_name, molecule=molecule, return_wfn=return_wfn)
+
+    t2 = time.process_time()     
+    print('Total time for psi4.energy() : %.3f seconds \n\n' % (t2-t))
+
     if print_cube:
         # check result contain the wfn
         if len(result) <2:

@@ -36,7 +36,7 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1,orb_list=[
     E_conv = e_conv
     #
     # Setup data for DIIS
-    t = time.time()
+    #t = time.time()
     E = 0.0
     Eold = 0.0
     #Fock_list = []
@@ -66,7 +66,7 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1,orb_list=[
     print("Full basis : %s\n" % jobrun.is_full_basis())
 
     MAXITER = maxit
-    t = time.time()
+    t = time.process_time()
      
     Eold_sup = 0.0 
     D_conv = e_conv 
@@ -95,7 +95,7 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1,orb_list=[
     debug_out.close()    
     ###################################################################################
     print()
-    print('Total time for FnT iterations: %.3f seconds \n\n' % (time.time() - t))
+    print('Total time for FnT iterations: %.3f seconds \n\n' % (time.process_time() - t))
     print("FnT iterations : %i" % FnT_ITER)
     print()
 
