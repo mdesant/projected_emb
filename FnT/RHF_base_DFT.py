@@ -197,7 +197,7 @@ def run(frag_container, e_conv, maxit, debug, loewdin=False,frag_id=1,orb_list=[
            orbtocube(cube_mol,[4.5,4.5,4.5],[0.2,0.2,0.2],frag_1.Ca_subset('ALL'),\
                                     orb_list,jk.basisset(),tag="PsiA_e")
     #dump the embedded (single fragment) and the reconstructed density on cube
-    Dsup_rebuilt = np.matmul(res_gather[1],res_gather[1].T)
+    Dsup_rebuilt = np.matmul(res_gather,res_gather.T)
     from cube_util import denstocube
     denstocube(cube_mol,jk.basisset(),frag_1.Da(),"Da_e",\
                                          [4.5,4.5,4.5],[0.2,0.2,0.2])

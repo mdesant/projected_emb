@@ -149,16 +149,13 @@ class FntFactory():
         # a local copy
         ffrozen_list = self.__frozn.copy() # necessary?
 
-        # res_gather, a tuple containg a list of matrix of MO(occ) coeff and 
-        # a regular supermolecular MO(occ) coeff matrix formed, arranging the 
+        # res_gather, a np.ndarrya containing a regular 
+        # supermolecular MO(occ) coeff matrix formed, arranging the 
         # MO(occ frag) matrix slices side-by-side
         
         res_gather = self.__thaw.Cocc_gather(ffrozen_list)
-        Cocc_sup = res_gather[1]
+        Cocc_sup = res_gather
         #print("len(res_gather) : %i\n" % len(res_gather))
-        #print("len(res_gather[0]) : %i\n" % len(res_gather[0]))
-        #print("type(res_gather[0] : %s\n" % type(res_gather[0]))
-        #print("type(res_gather[1] : %s\n" % type(res_gather[1]))
 
         #apply orthogonalization ?
         #check if orthogonal

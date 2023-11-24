@@ -456,8 +456,8 @@ class RHF_embedding_base():
 
   def get_Fock(self,Csup,return_ene=False,debug=False): #local debug
       # C_sup is a tuple
-      if not isinstance(Csup,tuple):
-          raise TypeError("Csup must be a tuple\n")
+      if not isinstance(Csup,np.ndarray):
+          raise TypeError("Csup must be a ndarray\n")
       #nbf = self.__nbf
       #nbf_tot = self.__nb_super
       Hcore = self.__Honeel
@@ -467,16 +467,11 @@ class RHF_embedding_base():
       ftype = self.__funcname
       frag_id = self.__frag_id
 
-      fock,ene =  Fock_emb(Hcore,Csup[1],basis,jk,ftype,frag_id)#TODO
+      fock,ene =  Fock_emb(Hcore,Csup,basis,jk,ftype,frag_id)#TODO
       #make the projector
-      Cocc_list = Csup[0].copy() # necessario?
-      if not isinstance(Cocc_list,list):
-          raise TypeError("check Cocc_list\n")
-      Cocc_list.pop(0)  # the first place in the list belongs to thawed fragment MOs coeff.
 
-      tmp = Cocc_list[0]
-      for elm in Cocc_list[1:]:
-          tmp = np.append(tmp,elm,axis=1)
+      tmp = Csup[:,self.__ndocc:]  # the  (nbas x ndocc) slice (thawed fragment occ. MOs coeff) is piled-up on the frozen coeff
+
       
       # TEST
       sup_D_frozen = np.matmul(tmp,tmp.T)
@@ -627,12 +622,8 @@ class RHF_embedding_base():
       for elm in frags_frozn:
           mtx =elm.Ca_subset(dest,Csup_format=Csup_shape)
           tmp.append(mtx)
-
-      res = tmp[0]
-      for mtx in tmp[1:]:
-          res = np.append(res,mtx,axis=1)
-
-      return (tmp,res)
+      res = np.concatenate(tmp,axis=1)
+      return res
  
 
   def set_eps(self,epsA):
@@ -877,10 +868,10 @@ class F_builder():
         #       sup_basis,
         #       jk,ftype,
         #       frag_id
-        if isinstance(Csup_gather,tuple):
-            Csup = Csup_gather[1]
-        else:
-            Csup = Csup_gather   # temporary workaround
+        
+        if not isinstance(Csup_gather,np.ndarray):
+            raise TypeError("Csup_gather must be a np.ndarray\n")
+        
         if np.iscomplexobj(Csup) or not isinstance(Csup,np.ndarray):
                 #diagonalize D.real
                 if not isinstance(Dmat,np.ndarray):
@@ -935,7 +926,7 @@ class list_baseclass():
             raise TypeError("Invalid Keyword")
 
     def set_Csup(self,Csup_gather): # the gathering has been done elsewhere
-        if not isinstance(Csup_gather,tuple):
+        if not isinstance(Csup_gather,np.ndarray):
                 raise TypeError("input must be a numpy.ndarray")
         self.__Csup = Csup_gather
 
