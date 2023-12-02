@@ -303,10 +303,12 @@ if __name__ == "__main__":
     parser.add_argument("--lv", help="Use level-shift operator instead of Huzinaga", required=False,
             default=False, action="store_true")
 
-    parser.add_argument("--cube_print", help="Dump the cube of the density and selected orbital of the wf_fragment", required=False,
+    parser.add_argument("--cube_print", help="Dump the cube of the density of the real supermolecular system", required=False,
             default=False, action="store_true")
     parser.add_argument("--orbitals", help="List of orbital of teh active (wfn) fragment", required=False,
             default="", type = str)
+    parser.add_argument("--cis", help="Use CIS.py script from Psi4NumPy repo", required=False,
+            default=False, action="store_true")
     
     args = parser.parse_args()
     # ene_vanilla is the energy of the genuine supermolecular calculation
@@ -378,6 +380,11 @@ if __name__ == "__main__":
     wfn_cc.Fb().copy(psi4.core.Matrix.from_array(res_container.Fa))
     wfn_cc.Cb().copy(psi4.core.Matrix.from_array(res_container.Ca))
     wfn_cc.set_energy(res_container.energy)
+    
+    if args.cis:
+        import CIS
+        print("doing CIS..\n")
+        CIS.CIS_in_dft(res_container,wfn_cc,args.numpy_mem)
     
     import ccsd_native
     import ccsd_conv
