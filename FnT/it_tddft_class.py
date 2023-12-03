@@ -188,38 +188,38 @@ def mainrun(mol_wfn,func_arg,tstep_arg,maxit_arg,loewdin_arg,debug_arg,mem_arg):
     print("Ene diff: %.5e\n" % (ene.real+Nuc_rep-ref_ene))
     
     return ene_list,dip_list
+if __name__ == '__main__':
+    ##################################################################
+    import argparse
+    ####################################
+    # parse arguments from std input
+    ####################################
+    parser = argparse.ArgumentParser()
 
-##################################################################
-import argparse
-####################################
-# parse arguments from std input
-####################################
-parser = argparse.ArgumentParser()
+    parser.add_argument("--func", help="Specify the functional", required=False,
+            default="hf", type=str)
+    parser.add_argument("--basis", help="Specify the orbital basis set", required=False,
+            default="def2-svp", type=str)
+    parser.add_argument("--tstep", help="Step parameter of i-time evolution",required=False,
+            default=0.5, type = float)
 
-parser.add_argument("--func", help="Specify the functional", required=False,
-        default="hf", type=str)
-parser.add_argument("--basis", help="Specify the orbital basis set", required=False,
-        default="def2-svp", type=str)
-parser.add_argument("--tstep", help="Step parameter of i-time evolution",required=False,
-        default=0.5, type = float)
+    parser.add_argument("-l", "--loewdin", help="Set the orthogonalized AO basis (Loewdin) as prop. basis", required=False,
+            default=False, action="store_true")
+    parser.add_argument("-d", "--debug", help="Dump debug file it_err.txt", required=False,
+            default=False, action="store_true")
+    parser.add_argument("--maxit", help="Max number of iterations",required=False,
+            default=30, type = int)
+    parser.add_argument("-m", "--mem", help="Set amount of memory for psi4numpy",required=False,
+            default=2, type = int)
+    args = parser.parse_args()
+    # test for water molecule
 
-parser.add_argument("-l", "--loewdin", help="Set the orthogonalized AO basis (Loewdin) as prop. basis", required=False,
-        default=False, action="store_true")
-parser.add_argument("-d", "--debug", help="Dump debug file it_err.txt", required=False,
-        default=False, action="store_true")
-parser.add_argument("--maxit", help="Max number of iterations",required=False,
-        default=30, type = int)
-parser.add_argument("-m", "--mem", help="Set amount of memory for psi4numpy",required=False,
-        default=2, type = int)
-args = parser.parse_args()
-# test for water molecule
+    geom_data = ' O -1.4626 0.0000 0.0000\n \
+         H -1.7312 0.9302 0.0000\n \
+         H -0.4844 0.0275 0.0000\n \
+         symmetry c1\n \
+         no_com\n \
+         no_reorient\n'
 
-geom_data = ' O -1.4626 0.0000 0.0000\n \
-     H -1.7312 0.9302 0.0000\n \
-     H -0.4844 0.0275 0.0000\n \
-     symmetry c1\n \
-     no_com\n \
-     no_reorient\n'
-
-wfn_mol = initialize(geom_data,args.basis)
-mainrun(wfn_mol, args.func, args.tstep, args.maxit, args.loewdin, args.debug, args.mem)
+    wfn_mol = initialize(geom_data,args.basis)
+    mainrun(wfn_mol, args.func, args.tstep, args.maxit, args.loewdin, args.debug, args.mem)
