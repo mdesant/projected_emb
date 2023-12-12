@@ -88,6 +88,9 @@ class FntFactory():
        self.__prop_ortho_mtx = None # contains the matrix to transform rt quantities to the "ortho" basis
        self.__rt_Cocc = None        # contains the propagated coeff
        self.__rt_mid_mat = None     # a midpoint aux matrix  for rt_Cocc
+       self.__tstep = None
+       self.__niter = None
+       self.__niter_pc = None
        self.__outfile = outfile
        self.__fnt_mag = None
 
@@ -385,14 +388,28 @@ class FntFactory():
         self.__thaw = self.__fnt_mag[0]
         self.__frozn = self.__fnt_mag[1] # is a list of frozen fragments
         return 0
-
+    """
     def set_rt_common(self,pulse_opts,ortho_mtx):
         self.__prop_ortho_mtx = ortho_mtx
         return None
 
-    def get_Ca(self):
-        return self.__C_AA  # this matrix in the "supermolecular" setting should include also the projeted-out MOs of the other fragment.
+    #def get_Ca(self):
+    #    return None  # the returned matrix in the "supermolecular" setting should include also the projeted-out MOs of the other fragment.
 
     def rt_step(self): # only for non-hybrid funcs
 
         return None
+    """
+    class rt_class():
+        def __init__(self,frag_list):
+            self.__frag_list = frag_list
+            self.__niter = niter
+            self.__delta_t = deltat
+            self.__pulse_opt = pulse # a dictionary
+
+        def __call__(self):
+            print("test")
+            # the rt-loop
+            #for k in range(self.__niter):
+                # at the very begining of each step we evaluate the Fock(super)
+                # block-wise , distribute the blocks to the subsys

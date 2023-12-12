@@ -39,7 +39,8 @@ class fock_common:
     nbf_tot: int 
     docc_num  : int   # the number of doubly occuopied MO of the fragment
     Hcore : np.ndarray 
-    ovap  : np.ndarray 
+    ovap  : np.ndarray
+    Vminus : np.ndarray
     mono_basis : psi4.core.BasisSet
     sup_basis  : psi4.core.BasisSet
     jk      : psi4.core.JK
@@ -140,6 +141,7 @@ class RHF_embedding_base():
       self.__do_lv = flag_lv
       
       self.__scf_iter = 1
+      self.__scf_common = None
 ###########################################
   def mol(self,supmol=False):
       if supmol:
@@ -154,6 +156,8 @@ class RHF_embedding_base():
       return self.__e_scf
   def  niter(self):
       return self.__scf_iter
+  def scf_common(self):
+      return self.__scf_common
 ###########################################
   def initialize(self,ovap_sup,basis_sup,basis_mono,\
                      Hsup,Ccoeff,acc_opts,target='direct',debug=False,muval=1.0e6):
@@ -258,6 +262,9 @@ class RHF_embedding_base():
       # set jk in scf_common
       scf_common.jk = self.__jk_sup
       scf_common.jk_mono = self.__jk_mono
+      scf_common.Vminus = self.__ortho
+      #store scf_common for later use
+      self.__scf_common = scf_common
  
       self.__acc_opts = acc_opts
  
@@ -454,7 +461,7 @@ class RHF_embedding_base():
           raise ValueError("Invalid keyword\n")
       return res
 
-  def get_Fock(self,Csup,return_ene=False,debug=False): #local debug
+  def get_Fock(self,Csup,return_ene=False,full_Fock=False): #
       # C_sup is a tuple
       if not isinstance(Csup,np.ndarray):
           raise TypeError("Csup must be a ndarray\n")
@@ -505,13 +512,15 @@ class RHF_embedding_base():
       else:
         proj =  make_Huzinaga(F_off,ovap_off.T,tmp)
 
-      if debug :
-          proj = (proj,fock)
+      if full_Fock :
+          res = fock
+      else:
+          res = fock[mask,:][:,mask] 
 
       if return_ene:
-          return fock[mask,:][:,mask] ,proj, ene
+          return res,proj, ene
       else:
-       return fock[mask,:][:,mask],proj
+       return res,proj
 
   def G(self,replace_func=None):
     #check dimension consistency
@@ -697,6 +706,45 @@ class RHF_embedding_base():
       self.__scf_iter += 1
   def func_name(self):
       return self.__funcname
+  def extract_subb(self,*args,**kwargs):
+      # d0 : principal diagonal block
+      # d1 : secondary diagonal block
+      # od : off-diagonal block
+
+      mask = self.__frag_mask
+      not_mask = self.__frag_notmask
+      
+      res = []
+      list_mtx = []
+      for a in args:
+          list_mtx.append(a)
+      for b in kwargs.values():
+          list_mtx.append(b)
+
+      #import pdb; pdb.set_trace()
+      for mtx in list_mtx:
+         if mtx is not None:
+             
+             if not isinstance(mtx,tuple):
+                 raise ValueError("Input must be a tuple\n")
+             ###
+             if mtx[1] == 'd0':
+                 m0 = mask
+                 m1 = mask
+             elif mtx[1] == 'd1':
+                 m0 = not_mask
+                 m1 = not_mask
+             elif mtx[1] == 'od':
+                 m0 = mask
+                 m1 = not_mask
+             else:
+                 raise Exception("invalid block selection\n")
+             ###
+             tmp =mtx[0]
+             tmp = tmp[m0,:][:,m1]
+             res.append(tmp)
+      return res 
+
 ############################################################################
 def make_Huzinaga(F_sub,ovap_sub,Cocc):
    # Cocc of the 'embedding' fragment
@@ -868,11 +916,11 @@ class F_builder():
         #       sup_basis,
         #       jk,ftype,
         #       frag_id
+        if not isinstance(Dmat, np.ndarray): #check Csup
+            if not isinstance(Csup_gather,np.ndarray):
+                raise TypeError("Csup_gather must be a np.ndarray\n")
         
-        if not isinstance(Csup_gather,np.ndarray):
-            raise TypeError("Csup_gather must be a np.ndarray\n")
-        
-        if np.iscomplexobj(Csup) or not isinstance(Csup,np.ndarray):
+        if np.iscomplexobj(Csup_gather) or not isinstance(Csup_gather,np.ndarray):
                 #diagonalize D.real
                 if not isinstance(Dmat,np.ndarray):
                     raise TypeError("Dmat is not np.ndarray\n")
@@ -883,7 +931,7 @@ class F_builder():
                 Csup_inp = eigvec
 
         else:
-                Csup_inp =  Csup
+                Csup_inp =  Csup_gather
         
         #def Fock_emb(Hcore,Csup,sup_basis,jk,ftype,frag_id=1):#TODO
         

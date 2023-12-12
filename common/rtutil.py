@@ -1,6 +1,7 @@
 ## exponental midpont+predictor-corrector to propagate electron density
 import sys
 import numpy as np
+from pulse_spec import funcswitcher
 
 ##################################################################
 
@@ -35,8 +36,8 @@ def exp_opmat(mat,dt):
 
 ##################################################################
 
-def mepc(Corth_ti,fock_builder,fock_mid_ti_backwd,i,delta_t,dipole,\
-                        Vminus,ovap,imp_opts, do_proj=False, maxiter= 10 ,fout=sys.stderr,debug=False):
+def mepc(Corth_ti, fock_builder, fock_mtx_actual, fock_mid_ti_backwd, i, delta_t, dipole,\
+                        Vminus, ovap, imp_opts, do_proj=False, maxiter= 10 ,fout=sys.stderr,debug=False):
     t_arg=np.float_(i)*np.float_(delta_t)
     
     if imp_opts is None:
@@ -53,14 +54,14 @@ def mepc(Corth_ti,fock_builder,fock_mid_ti_backwd,i,delta_t,dipole,\
     C_ti= np.matmul(Vminus,Corth_ti)
     D_ti = np.matmul(C_ti,np.conjugate(C_ti.T)) 
     k=1
-    
-    fock_mtx,proj,ene=fock_builder.get_Fock(None,Dmat=D_ti,return_ene=True)#the frag_id is meaningless here
+    # fock_mtx_actual is passed as arg and should include the projector
+    #fock_mtx_actual,proj,ene=fock_builder.get_Fock(None,Dmat=D_ti,return_ene=True)
     #DEBUG
     #ExcAAhigh_i=0.0
     #ExcAAlow_i=0.0
     
     #add -pulse*dipole
-    fock_ti_ao = fock_mtx - (dipole*pulse)
+    fock_ti_ao = fock_mtx_actual - (dipole*pulse)
     if do_proj:
         fock_ti_ao +=proj
 
@@ -135,4 +136,4 @@ def mepc(Corth_ti,fock_builder,fock_mid_ti_backwd,i,delta_t,dipole,\
          fout.write('norm is: %.12f\n' % norm_f)
          #raise Exception("Numember of iterations exceeded maxit = %i)" % maxiter)
     # return energy components , the Fock, the forward midpoint fock and the evolved density matrix 
-    return ene,pulse,fock_ti_ao,fock_inter,Corth_ti_dt
+    return pulse,fock_inter,Corth_ti_dt

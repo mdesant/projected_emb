@@ -5,8 +5,16 @@ import sys
 import re
 import time
 import numpy as np
+
 sys.path.insert(0, "../common")
+modpaths = os.environ.get('RTUTIL_PATH')
+
+if modpaths is not None :
+    for path in modpaths.split(";"):
+        sys.path.append(path)
+
 from util import Molecule
+
 # scf_type, df_guess, basis_spec, geom_file, func, e(d)_convergence : arguments psi4.set_options()
 # acc_param : determines the type of scf acceleration scheme
 
@@ -263,9 +271,26 @@ if __name__ == "__main__":
     parser.add_argument("--df_guess", help="Set True SCF_DF_GUESS in ground state SCF", required=False, 
             type=bool, default=False)
     parser.add_argument("--scf_opts", help="Select SCF acceleration options : accel_scheme;maxvec;type (default : diis;6; None )", required=False,
-            default="diis;6; None", type=str)
+            default="_diis;6; None", type=str)
 
     
     args = parser.parse_args()
     frags_container, psi4mol, wfnlist = initialize(args.scf_type, args.df_guess, args.obs1, args.puream,\
-                                                        args.geom, args.func, args.scf_opts, args.e_conv,args.d_conv,debug=True)
+                                                        args.geom, args.func, args.scf_opts, args.e_conv,args.d_conv,use_lv=False,debug=True)
+
+    # test Fock,ovap,density block extraction
+    # garther the occupied MO (in a composite matrix)
+    frozen_frag = []
+    frag_1 = frags_container[0]
+    print("I am frag : %i\n" % frag_1.whoIam())
+    for el in frags_container[1]:
+       frozen_frag.append(el)
+    Csup = frag_1.Cocc_gather(frozen_frag)
+    Dsup = np.matmul(Csup,Csup.T)
+    #proj will correspond to the operator to project-out frag(frozen) density
+    Fock,proj = frag_1.get_Fock(Csup,full_Fock=True)
+    ovap_full = frag_1.full_ovapm()
+    ovap_1 = frag_1.S()
+    # principal subblock
+    ovap_d0 = frag_1.extract_subb(ovap=(ovap_full,'d0'))[0]
+    print("Check ovap subblock : SUCCESS ... %s\n" % np.allclose(ovap_d0,ovap_1))
